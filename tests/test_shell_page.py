@@ -627,6 +627,30 @@ def test_the_memory_guard_fold_refuses_on_a_card_and_still_stops_a_spark():
         assert "leave the GPU" not in out[face]
 
 
+def test_vsa_uses_the_shared_take_sheet_without_supported_recipes_or_estimates():
+    out = run("""
+      C.videoBackend="vsa"; C.step=1; C.seed=99; C.refVideos=["old.mp4"]; C.loras=[{name:"old"}];
+      S.windows_vsa={};
+      globalThis.VSA={image:"reference.png",frames:158,mode:"single",sequenceSeconds:8};
+      globalThis.showEstimate=()=>{throw new Error("VSA must not estimate the supported recipe");};
+      globalThis.lorasOf=()=>C.loras;
+      out.single=text(takeSheet()); out.layout=text(createLayout(el("div",{},"Wizard")));
+      VSA.mode="sequence"; out.sequence=text(takeSheet());
+      await button(takeSheet(),"Go to Render").attrs.onclick();
+      out.step=C.step;
+      let clicks=0; NODES["#view section.card button.hot"]={disabled:false,click(){clicks++;}};
+      await button(takeSheet(),"Roll this take").attrs.onclick(); out.clicks=clicks;
+      NODES["#view section.card button.hot"].disabled=true;
+      await button(takeSheet(),"Roll this take").attrs.onclick(); out.blockedClicks=clicks;
+    """)
+    assert "Take sheet" in out["layout"] and "Wizard" in out["layout"]
+    assert "Reference picture" in out["single"] and "H3 Ref2VA VSA" in out["single"]
+    assert "4 passes" in out["single"] and "864 × 480" in out["single"] and "158 frames" in out["single"]
+    assert "Looks" not in out["single"] and "Quick look" not in out["single"] and "Sharp Spec" not in out["single"]
+    assert "8 s sequence" in out["sequence"] and "Per shot" in out["sequence"]
+    assert out["step"] == 4 and out["clicks"] == out["blockedClicks"] == 1
+
+
 def test_the_chip_names_the_card_and_a_spark_stays_a_spark():
     out = run("""out.spark = platName(); out.sparkCard = cardFace();
       S.platform_label = "DGX SPARK · CUDA · H3-CUDA";

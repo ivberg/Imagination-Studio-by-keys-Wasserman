@@ -32,8 +32,9 @@ async function actQueue(kind, params, slot) { if (ACT.busy) return; ACT.busy = t
   ACT.busy = false; render(); }
 const actJob = slot => jobs.find(j => j.id === ACT.jobs[slot]);
 const actShow = (slot, made) => { const job = actJob(slot); return job ? el("div", { style: "margin-top:12px" }, jobCard(job), job.status === "done" ? made(job) : null) : null; };
-const actUse = (path, how) => how === "first" ? () => { C.image = path; C.goes = "video"; C.start = "own"; C.step = 1; tab = "Create"; render(); }
-  : () => { C.goes = "video"; C.start = "refs"; sync(); if (!isRef()) return toast("Reference pictures need MiniMax H3 Ref2VA on this machine"); if (!C.refs.includes(path)) { C.refs.push(path); C.subjects.push(""); } C.step = 1; tab = "Create"; render(); };
+const actUse = (path, how) => how === "first" ? () => { C.videoBackend = "standard"; C.image = path; C.goes = "video"; C.start = "own"; C.step = 1; tab = "Create"; render(); }
+  : () => { if (C.videoBackend === "vsa" && S && S.windows_vsa) return useVideoPicture(path);
+    C.goes = "video"; C.start = "refs"; sync(); if (!isRef()) return toast("Reference pictures need MiniMax H3 Ref2VA on this machine"); if (!C.refs.includes(path)) { C.refs.push(path); C.subjects.push(""); } C.step = 1; tab = "Create"; render(); };
 function actPanel() { const o = ACT.open; if (!o) return null; if (typeof REV_KINDS !== "undefined" && REV_KINDS.includes(o.kind)) return revPanel(o);  // revise.js
   if (o.kind === "swap" && typeof swapPanel === "function") return swapPanel(o);  // swap.js
   const a = actOf(o.kind), f = ACT[ACT_KEY[o.kind]], redraw = () => render();

@@ -627,7 +627,7 @@ class SecurityHeaders:
 app.add_middleware(SecurityHeaders)
 
 WINDOWS_WRITES = re.compile(
-    r"/api/(?:key(?:/new)?|settings|compose|prompt/check|estimate|upload|frame|clear|trash(?:/restore)?|storage/refresh|motion/packs/import|jobs(?:/[A-Za-z0-9_-]+/cancel)?|"
+    r"/api/(?:key(?:/new)?|settings|compose|prompt/check|estimate|upload|frame|video-vsa/reference|clear|trash(?:/restore)?|storage/refresh|motion/packs/import|jobs(?:/[A-Za-z0-9_-]+/cancel)?|"
     r"projects(?:/[A-Za-z0-9_-]+)?|slate/(?:projects(?:/[A-Za-z0-9_-]+)?|exists|compile|brain|package|trash/[A-Za-z0-9_-]+/restore)|"
     r"suite/import|suite/imports/[A-Za-z0-9_-]+/(?:slate|attach|motion)|"
     r"brains/(?:settings|test|(?:copilot|local)/(?:verify|default))|agent/(?:tasks(?:/[A-Za-z0-9_-]+/cancel)?|"
@@ -3144,6 +3144,51 @@ def take_frame(body: dict) -> dict:
     if not target.is_file():
         raise HTTPException(400, "no frame could be read there")
     return {"path": relative(target)}
+
+
+@app.post("/api/video-vsa/reference")
+def vsa_reference(body: dict) -> dict:
+    """Inspect one reference, or explicitly make a bounded CPU resize copy. The source is never changed."""
+
+    from PIL import Image
+    import tempfile
+
+    if not (WINDOWS or WIN32):
+        raise HTTPException(501, "Experimental Ref2VA VSA is a native Windows recipe.")
+    if set(body) - {"path", "resize"} or not isinstance(body.get("path"), str) or type(body.get("resize", False)) is not bool:
+        raise HTTPException(400, "choose a Studio picture and an optional boolean resize action")
+    source = inside(body["path"])
+    if not source.is_file() or source.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+        raise HTTPException(400, "choose a picture in the studio's folder (png, jpg or webp)")
+    try:
+        with Image.open(source) as image:
+            width, height = image.size
+    except (OSError, ValueError, Image.DecompressionBombError):
+        raise HTTPException(400, "the reference picture could not be read")
+    if not body.get("resize", False):
+        return {"path": relative(source), "width": width, "height": height,
+                "ready": width <= 512 and height <= 288, "resized": False}
+    if not media_tools()["ffmpeg"]:
+        raise HTTPException(400, f"resizing a reference needs ffmpeg, which is not installed on this machine: {FFMPEG_HOW}")
+    folder = HOME / "uploads"
+    folder.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(prefix="vsa-reference-", suffix=".png", dir=folder, delete=False) as copy:
+        target = Path(copy.name)
+    try:
+        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-threads", "2", "-i", str(source),
+                        "-filter_threads", "1", "-vf", "scale=w='min(iw,512)':h='min(ih,288)':force_original_aspect_ratio=decrease,setsar=1",
+                        "-frames:v", "1", "-threads", "2", str(target)],
+                       check=True, env=environment({}), timeout=30, capture_output=True)
+        with Image.open(target) as image:
+            width, height = image.size
+            image.verify()
+        if width > 512 or height > 288:
+            raise ValueError("the reference copy is outside the recipe")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, ValueError, Image.DecompressionBombError):
+        target.unlink(missing_ok=True)
+        raise HTTPException(400, "the reference copy could not be made within 30 seconds; the original is unchanged")
+    return {"path": relative(target), "width": width, "height": height, "ready": True,
+            "resized": True, "source": relative(source)}
 
 
 @app.post("/api/fit")

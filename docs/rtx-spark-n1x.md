@@ -24,6 +24,28 @@ INT8 ConvRot Ref2VA, NVFP4/AWQ Qwen3VL-32B, FP16 video VAE, FP32 audio VAE, the 
 and the FastH3 VSA gate. MiniMax H3's Community License and territory restrictions still apply.
 
 Restart the **real Studio**, then open **Video -> Experimental Ref2VA VSA**, or choose that backend in Create.
+Both backends use the same five Create steps: shot, picture/reference, words and sound, prompt review, then render.
+The shared take sheet shows VSA's own fixed recipe, length, seed and reference status, without supported H3's
+recipe shortcuts or estimates; its Roll button uses the same guarded VSA action as the Render step.
+Scene, action, camera, dialogue, soundscape, music, seed and the reviewed prompt are shared when switching backends;
+review or explicitly rebuild the prompt after switching to change its frame/reference wording.
+VSA keeps its own reference picture, clip length and sequence settings; supported H3's frames, references,
+LoRAs, canvas and passes remain separate and are not sent to this recipe. In step 2, upload a picture or pick a
+still/scout from the Library. **Make scouts in Image** opens the normal image form without queuing a render;
+**animate this**, Home's **animate** and the Library's **use** hand the chosen picture to your selected video backend.
+Making pictures keeps that backend selection. Supported H3 still treats its chosen picture as a first frame;
+VSA treats it only as a reference. Explicit first/last-frame and audio-reference actions stay on supported H3.
+
+An oversized VSA picture is not silently resized or sent to the queue. **Create resized reference copy** explicitly
+makes a PNG in uploads, preserving the aspect ratio within 512x288, without cropping, upscaling or changing the
+original. The CPU-only preparation endpoint, `POST /api/video-vsa/reference`, inspects `{"path":"..."}` without
+writing; adding `"resize":true` makes the copy with a 30-second tool timeout. Neither action runs a model.
+The Render step stays disabled until the selected picture has been checked and fits the recipe.
+Finished VSA clips/sequences use the normal Editor/download actions, can open their Library processing actions,
+and can be chosen for a soundtrack in Music. Those existing features retain their own prerequisites and guards.
+Production/Slate backend integration remains separate work.
+The existing experimental feature-check panel is collapsed by default in Create and Machine; expand it to run a check
+or inspect the length history. Qualification behavior is unchanged.
 **Machine -> Feature check: experimental Ref2VA VSA** queues the same explicit check. The API equivalent is:
 
 ```powershell

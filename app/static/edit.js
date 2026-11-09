@@ -120,7 +120,8 @@ function viewEdit(goes) { const body = el("div"), st = ED.state;
     if (made.status === "done") put(body, el("div", { class: "grid", style: "margin-top:10px" }, made.outputs.map(p => el("div", { class: "tile" }, media(p),
       el("div", { class: "cap" }, el("span", { title: p, style: "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" }, p.split("/").pop().replace(/^edit_?|\.png$/g, "").replace(/_/g, " ") || "edit")),
       el("div", { class: "cap", style: "padding-top:0;justify-content:flex-end" }, el("a", { href: file(p), download: "" }, "Download"),
-        el("a", { href: "#", title: "Open a new clip on this picture", onclick: e => { e.preventDefault(); C.image = p; C.goes = "video"; C.start = "own"; C.step = 1; changed(); } }, "first frame"),
-        el("a", { href: "#", title: "End a clip on this picture", onclick: e => { e.preventDefault(); C.lastImage = p; C.goes = "video"; if (C.start === "refs") C.start = "text"; C.step = 1; changed(); } }, "last frame"),
+        el("a", { href: "#", title: "Supported H3: open a new clip on this picture", onclick: e => { e.preventDefault(); C.videoBackend = "standard"; C.image = p; C.goes = "video"; C.start = "own"; C.step = 1; changed(); } }, "first frame"),
+        el("a", { href: "#", title: "Supported H3: end a clip on this picture", onclick: e => { e.preventDefault(); C.videoBackend = "standard"; C.lastImage = p; C.goes = "video"; if (C.start === "refs") C.start = "text"; C.step = 1; changed(); } }, "last frame"),
+        S.windows_vsa ? el("a", { href: "#", title: "Use this picture as a VSA reference, not a first frame", onclick: e => { e.preventDefault(); C.videoBackend = "vsa"; useVideoPicture(p); } }, "VSA reference") : null,
         el("a", { href: "#", title: "Edit this result again", onclick: e => { e.preventDefault(); ED.image = p; render(); } }, "edit again")))))); }
   return el("section", { class: "card" }, body); }

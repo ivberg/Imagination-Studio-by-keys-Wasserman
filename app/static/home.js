@@ -13,7 +13,7 @@ function timeOfDay() { const h = new Date().getHours(); const night = typeof car
 function timecode(d = new Date()) { const p = n => String(n).padStart(2, "0"); return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()) + ":" + p(Math.floor(d.getMilliseconds() / 41.67)); }
 // where Keys and Wasserman Productions publish (Home under the credit; Settings → About lists them with the rest)
 const HOME_LINKS = [["Keys on GitHub", "https://github.com/drowzeys"], ["Wasserman Productions on GitHub", "https://github.com/wassermanproductions"]];
-const startCreate = (set, step = 0) => { Object.assign(C, { videoBackend: "standard" }, set); C.step = step; C.prompt = ""; sync(); go("Create"); };
+const startCreate = (set, step = 0) => { Object.assign(C, set.goes === "image" || set.goes === "edit" ? {} : { videoBackend: "standard" }, set); C.step = step; C.prompt = ""; sync(); go("Create"); };
 
 // the machine, in one line: LED, name, GPU, memory against the guard's floor, disk
 function machineStrip() {
@@ -221,7 +221,7 @@ function viewHome() {
   api("/api/library").then(list => { SHELL.libCache = list; const pick = list.filter(m => m.kind !== "audio").slice(0, 12);
     recent.replaceChildren(...(pick.length ? pick.map(m => el("div", { class: "tile" }, media(m.path, m.kind === "video" ? { controls: false, muted: true, loop: true, playsinline: true, onmouseenter: e => e.target.play().catch(() => {}), onmouseleave: e => e.target.pause() } : {}),
       el("div", { class: "cap" }, el("span", {}, m.path.split("/").pop()), m.kind === "video" ? el("button", { class: "small", onclick: () => addToTimeline(m.path) }, "+ timeline")
-        : el("button", { class: "small", onclick: () => startCreate({ image: m.path, goes: "video", start: "own" }, 1) }, "animate"))))
+        : el("button", { class: "small", onclick: () => useVideoPicture(m.path) }, "animate"))))
       : [el("div", { class: "note" }, "Nothing rendered yet. Your takes will line up here.")])); }).catch(() => recent.replaceChildren(el("div", { class: "note" }, "The Library could not be read.")));
   if (typeof nightPanel === "function") put(wrap, el("div", { class: "sectionhead" }, el("h2", {}, "Night shift"), el("span", { class: "note" }, "A batch rendered while you sleep, with dailies in the morning.")), nightPanel());
   put(wrap, el("div", { class: "sectionhead" }, el("h2", {}, "Machine")), machineStrip());

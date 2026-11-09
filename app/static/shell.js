@@ -373,23 +373,25 @@ function takeRecipes() { const final = UPSCALED["720p"] && S.presets[UPSCALED["7
     { id: "final", title: final.label, says: "8 passes · " + (final.up ? UPSCALED["720p"][1] : "1280 × 720"), on: () => C.engine === "fasth3" && C.passes === "8" && C.res === "720p" && !!C.up === final.up && !customOn(), set: () => { Object.assign(C, { engine: "fasth3", passes: "8", res: "720p", up: final.up, steps: "" }); changed(); } },
   ].filter(Boolean); }
 function takeSheet() {
-  const video = C.goes === "video", est = el("div", { class: "note", style: "margin:0" });
+  const video = C.goes === "video", vsa = video && C.videoBackend === "vsa" && !!S.windows_vsa, est = el("div", { class: "note", style: "margin:0" });
   const row = (k, v) => el("div", { class: "kv", style: "padding:9px 0;border-bottom:1px solid var(--line)" }, el("span", {}, k), el("b", { style: "text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:62%" }, v));
-  const out = output() || { label: "" }, size = out.size ? out.size.join(" × ") : "";
-  const startWord = { text: "text only", scout: "a scout image", own: "your picture", refs: "references" }[C.start];
+  const out = vsa ? { size: [864, 480] } : output() || { label: "" }, size = out.size ? out.size.join(" × ") : "";
+  const startWord = vsa ? "one reference picture" : { text: "text only", scout: "a scout image", own: "your picture", refs: "references" }[C.start];
   const roll = () => { if (C.step !== 4) { C.step = 4; render(); window.scrollTo({ top: 0, behavior: "smooth" }); return; } const b = $("#view section.card button.hot"); if (b && !b.disabled) b.click(); else toast("Finish the steps marked on the left first"); };
-  if (video && !isLong()) showEstimate(C, est);
+  if (video && !vsa && !isLong()) showEstimate(C, est);
   return el("div", { class: "panel stack", style: "position:sticky;top:calc(var(--head) + var(--sub) + 18px);gap:16px" },
-    el("div", { class: "kv" }, el("span", { class: "eyebrow" }, "Take sheet"), el("span", {}, "step " + (C.step + 1) + " of 5 · " + STEP_NAMES[C.step])),
-    video && !isRef() ? el("div", { class: "stack", style: "gap:8px" }, takeRecipes().map(r => el("button", { class: "recipe-row" + (r.on() ? " on" : ""), onclick: r.set }, el("b", {}, r.title), el("span", {}, r.says)))) : null,
-    el("div", {}, row("Making", video ? (isLong() ? "a long take" : "a clip with sound") : C.goes === "image" ? "stills" : "a picture edit"),
-      video ? row("Starts from", startWord) : null, video ? row("Engine", (C.engine === "fasth3" ? "FastH3 · " + (customOn() ? C.steps : C.passes) + " passes" : "MiniMax H3")) : null,
-      video ? row("Size", size || out.label) : row("Size", C.imageSize.replace("x", " × ")), video ? row("Length", isLong() ? (S.long[C.seconds] || C.seconds + " s") : exact(framesOf(C))) : null,
-      row("Seed", String(C.seed)), lorasOf(C).length ? row("Looks", lorasOf(C).length + " LoRA" + (lorasOf(C).length > 1 ? "s" : "")) : null,
-      isRef() ? row("References", refCount() + " of " + (S.reference_total || 12)) : null),
+    el("div", { class: "kv" }, el("span", { class: "eyebrow" }, "Take sheet"), el("span", {}, "step " + (C.step + 1) + " of 5 · " + (vsa && C.step === 1 ? "Reference picture" : STEP_NAMES[C.step]))),
+    video && !vsa && !isRef() ? el("div", { class: "stack", style: "gap:8px" }, takeRecipes().map(r => el("button", { class: "recipe-row" + (r.on() ? " on" : ""), onclick: r.set }, el("b", {}, r.title), el("span", {}, r.says)))) : null,
+    el("div", {}, row("Making", video ? (vsa ? VSA.mode === "sequence" ? "a sequence with sound" : "a clip with sound" : isLong() ? "a long take" : "a clip with sound") : C.goes === "image" ? "stills" : "a picture edit"),
+      video ? row("Starts from", startWord) : null, video ? row("Engine", vsa ? "H3 Ref2VA VSA · 4 passes" : (C.engine === "fasth3" ? "FastH3 · " + (customOn() ? C.steps : C.passes) + " passes" : "MiniMax H3")) : null,
+      video ? row("Size", size || out.label) : row("Size", C.imageSize.replace("x", " × ")), video ? row("Length", vsa ? VSA.mode === "sequence" ? VSA.sequenceSeconds + " s sequence" : exact(Number(VSA.frames)) : isLong() ? (S.long[C.seconds] || C.seconds + " s") : exact(framesOf(C))) : null,
+      vsa && VSA.mode === "sequence" ? row("Per shot", exact(Number(VSA.frames))) : null,
+      row("Seed", String(C.seed)), !vsa && lorasOf(C).length ? row("Looks", lorasOf(C).length + " LoRA" + (lorasOf(C).length > 1 ? "s" : "")) : null,
+      vsa ? row("Reference picture", !VSA.image ? "needed in step 2" : VSA.referenceBusy ? "checking" :
+        VSA.reference && VSA.reference.path === VSA.image && VSA.reference.ready && !VSA.referenceError ? "selected" : "check / resize in step 2") : isRef() ? row("References", refCount() + " of " + (S.reference_total || 12)) : null),
     est,
     video ? el("button", { class: "hot", style: "width:100%", onclick: roll }, C.step === 4 ? "Roll this take" : "Go to Render →") : null,
-    el("div", { class: "note", style: "margin:0;font-size:13.5px" }, "The full controls stay on the left. A recipe only sets engine, passes and size."));
+    el("div", { class: "note", style: "margin:0;font-size:13.5px" }, vsa ? "Experimental fixed recipe. Length and sequence controls stay on the left; the picture is a reference, not a first-frame anchor." : "The full controls stay on the left. A recipe only sets engine, passes and size."));
 }
 // what the prompt goes to, as one small control over Create: the Image and Video rooms open it already set
 function intentBar() { const opts = { video: "Video with sound", image: "Image", edit: "Edit a picture" };
@@ -399,5 +401,5 @@ function intentBar() { const opts = { video: "Video with sound", image: "Image",
     el("div", { class: "seg-ctl", role: "tablist", "aria-label": "The prompt goes to" }, Object.entries(opts).map(([k, label]) => el("button", { type: "button", role: "tab", "aria-selected": C.goes === k ? "true" : "false", class: C.goes === k ? "on" : "",
       onclick: () => { if (C.goes === k) return; C.goes = k; C.step = 0; changed(); } }, label))),
     el("div", { class: "marks" }, marks)); }
-function createLayout(node) { const bar = intentBar(); if (C.goes === "edit" || C.goes === "video" && C.videoBackend === "vsa") return el("div", {}, bar, node);
+function createLayout(node) { const bar = intentBar(); if (C.goes === "edit") return el("div", {}, bar, node);
   return el("div", {}, bar, el("div", { class: "split", style: "grid-template-columns:minmax(0,1fr) 330px" }, node, takeSheet())); }

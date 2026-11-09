@@ -96,12 +96,32 @@ def test_old_hardware_render_does_not_inflate_current_highest(sweep):
     assert found["render_diagnostics"][0]["frames"] == 124
 
 
+@pytest.mark.parametrize("spoken", [False, True])
+def test_shared_wizard_composes_a_single_picture_reference_with_sound(client, monkeypatch, spoken):
+    fields = {"scene": "A woman in a bakery.", "action": "She waves.", "camera": "A locked, still camera.",
+              "soundscape": "Soft room ambience.", "music": "N/A",
+              "dialogue": [{"text": "Good morning.", "voice": "A calm voice", "subject": 1}] if spoken else []}
+    response = client.post("/api/compose", json={
+        "fields": fields, "first_frame": False, "last_frame": False, "frames": 158,
+        "seconds": 158 / 24, "references": 1, "referenced": True, "loras": [],
+    })
+    assert response.status_code == 200
+    prompt = response.json()["prompt"]
+    assert "<Picture 1>" in prompt and "<Picture 2>" not in prompt
+    assert "<Video " not in prompt and "<Audio " not in prompt
+    assert "overall_soundscape:" in prompt and "Soft room ambience." in prompt
+    assert ("<d>[English] Good morning.</d>" in prompt) is spoken
+    assert "first frame" not in prompt.lower()
+    monkeypatch.setattr(server.negation, "OWN", ())
+    assert not server.negation.find(prompt)
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 def test_page_hides_qualification_controls_when_off_but_always_keeps_lengths_selectable(enabled):
     from test_shell_page import run
     page = (Path(__file__).resolve().parents[1] / "app" / "static" / "index.html").read_text(encoding="utf-8")
     controls = page[page.index("function vsaLengths()"):page.index("function viewCreate()")]
-    out = run("globalThis.VSA = {image:'reference.png',prompt:'A scene.',seed:7,frames:124,mode:'single',sequenceSeconds:60};\n" +
+    out = run("globalThis.VSA = {image:'reference.png',reference:{path:'reference.png',ready:true},frames:124,mode:'single',sequenceSeconds:60}; C.prompt='A scene.'; C.seed=7;\n" +
               controls + """
       const enabled = """ + str(enabled).lower() + """;
       S.windows_vsa = {qualification_enabled:enabled,available:true,
@@ -111,15 +131,19 @@ def test_page_hides_qualification_controls_when_off_but_always_keeps_lengths_sel
       globalThis.select = (obj,key,options) => el("select", {}, Object.values(options));
       globalThis.choice = () => el("div"); globalThis.bind = (obj,key,node) => node;
       globalThis.typed = node => node; globalThis.jobCard = () => el("div");
-      const root = viewVsa(); out.text = text(root);
+      globalThis.negNote = () => null;
+      const root = el("div",{},vsaControls(),viewVsa()); out.text = text(root);
       out.enabled = !button(root,"Render 124 frames").attrs.disabled;
       out.options = find(root,n=>n.tag==="select").kids.length;
       out.basic = Boolean(button(root,"Check the basic 22-frame"));
       out.automatic = Boolean(button(root,"Qualify clip lengths automatically"));
+      const panel = find(root,n=>n.tag==="details" && n.attrs["data-feature"]==="video-vsa");
+      out.collapsed = Boolean(panel && !panel.attrs.open);
       VSA.frames = 362; out.maximum = !button(viewVsa(),"Render 362 frames").attrs.disabled;
     """)
     assert out["enabled"] and out["maximum"] and out["options"] == 21
     assert out["basic"] is enabled and out["automatic"] is enabled
+    assert out["collapsed"] is enabled
     if enabled:
         assert "Highest successful single clip: 3.042" in out["text"] and "not a length cap" in out["text"]
     else:
