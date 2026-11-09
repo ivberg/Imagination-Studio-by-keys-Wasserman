@@ -170,8 +170,14 @@ MOSS_NEGATIVE = "nsfw, worst quality, bad anatomy, watermark, jpeg artifact"
 def call(path, data=None):
     request = urllib.request.Request(URL + path, data=json.dumps(data).encode() if data is not None else None,
                                      headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(request, timeout=120) as reply:
-        body = reply.read()
+    try:
+        with urllib.request.urlopen(request, timeout=120) as reply:
+            body = reply.read()
+    except urllib.error.HTTPError as error:
+        if os.environ.get("STUDIO_REF2VA_VSA") == "1":
+            detail = error.read(4096).decode("utf-8", errors="replace")
+            raise RuntimeError(f"ComfyUI rejected {path} (HTTP {error.code}): {detail}") from error
+        raise
     return json.loads(body) if body else {}
 
 
@@ -704,23 +710,29 @@ def reference(args) -> None:
             sys.exit(f"{path} has no sound: a reference audio clip is an audio file (or a video with sound)")
     check_clip_lengths("audio clip", [(path, probe["audio_seconds"]) for path, probe in sounds])
     sizes = [reference_video_size(*probe["video"], args.width, args.height, args.ref_video_size) for _, probe in probes]
+    vsa = args.ref_mode == "vsa"
+    if vsa:
+        sys.path.insert(0, str(HERE.parent / "app"))
+        import windows_video_vsa
+        windows_video_vsa.prepare_renderer(args)
     loras = hub_loras(args.lora)
     last = side("kind").read_text().strip() if side("kind").exists() else ""
-    if up() and (last.startswith("video") or loras or "lora" in last):
+    if up() and (vsa or last.startswith("video") or loras or "lora" in last):
         # A LoRA render, and the render after one, start from a server with nothing loaded, as for FastH3: the bf16
         # transformer (40 GB) with a LoRA merged in and the one ComfyUI still holds do not fit side by side.
         # After a FastH3 clip the server still holds what ComfyUI's own unloading does not give back (TensorFold's
         # engine keeps its int8 weights): measured, a reference render that followed one ran with 14 GB free
         # instead of 38. A server with nothing loaded is the safe start; it costs the load again.
         fresh_server("a reference render starts from a server with nothing loaded")
-    fits_or_exit(args, bool(loras) or args.ref_mode == "turbo", True, pictures=len(pictures),
-                 reference_frames=sum(min(args.frames, int(round((probe["seconds"] or 0) * FPS))) for _, probe in probes))
+    if not vsa:
+        fits_or_exit(args, bool(loras) or args.ref_mode == "turbo", True, pictures=len(pictures),
+                     reference_frames=sum(min(args.frames, int(round((probe["seconds"] or 0) * FPS))) for _, probe in probes))
     ensure_server("ref2va")
     mode = args.ref_mode
     # a LoRA (the Turbo adapter, or one from the hub) is merged at run time, which needs the bf16 file: merged into
     # the 8-bit file's rotated weights it corrupts the clip without an error
-    name = REF2VA["bf16"] if mode == "turbo" or loras or not installed("unet", REF2VA["int8"]) else REF2VA["int8"]
-    missing = [f for kind, f in (("unet", name),) + ((("lora", REF2VA_TURBO),) if mode == "turbo" else ()) if not installed(kind, f)]
+    name = REF2VA["int8"] if vsa else REF2VA["bf16"] if mode == "turbo" or loras or not installed("unet", REF2VA["int8"]) else REF2VA["int8"]
+    missing = [f for kind, f in (("unet", name),) + ((("lora", REF2VA_TURBO),) if mode in ("turbo", "vsa") else ()) if not installed(kind, f)]
     if missing:
         sys.exit(f"not installed: {', '.join(missing)} (bash oneshot-setup-spark.sh --ref2va)")
     # the bf16 and the 8-bit transformer never stay loaded together
@@ -783,6 +795,8 @@ def reference(args) -> None:
         w[str(80 + index)] = {"class_type": "LoraLoaderModelOnly", "inputs": {"model": model, "lora_name": lora, "strength_model": strength}}
         model = [str(80 + index), 0]
         print(f"[tensorfold] LoRA {lora} at {strength:g} on the bf16 Ref2VA weights", flush=True)
+    if vsa:
+        model = windows_video_vsa.configure_workflow(w)
     w["10"] = {"class_type": "BasicScheduler", "inputs": {"model": model, "scheduler": "simple", "steps": steps, "denoise": 1.0}}
     w["11"] = {"class_type": "BasicGuider", "inputs": {"model": model, "conditioning": ["6", 0]}}
     guidance = float(os.environ.get("SPARK_REF_CFG") or 1.0)
@@ -797,7 +811,7 @@ def reference(args) -> None:
                           "latent_image": ["6", 1]}}
     save_sound(w, ["14", 0], w["16"]["inputs"]["filename_prefix"] + "_sound")
     cropped = crop_frames(w, args.crop, args.width, args.height) if args.crop else True
-    kind = "Ref2VA with the Turbo adapter" if mode == "turbo" else "Ref2VA"
+    kind = "Ref2VA VSA (experimental)" if vsa else "Ref2VA with the Turbo adapter" if mode == "turbo" else "Ref2VA"
     count = (f"{len(pictures)} reference picture(s)" + (f", {len(videos)} video(s)" if videos else "")
              + (f", {len(audios)} audio clip(s)" if audios else "") + (", the videos' own sound" if videos and args.ref_video_sound else ""))
     print(f"[tensorfold] engine: cuda (ComfyUI, MiniMax H3 {kind}, {name.split('pruned_')[1].split('.')[0]}), "
@@ -1392,8 +1406,9 @@ def main() -> None:
                    help="a reference video is brought down to the clip's pixel area. The model's own 768-pixel canvas "
                         "(REF_VIDEO_SIZE=full on the Mac) is several times the rows and the memory and is not offered "
                         "on a Spark")
-    v.add_argument("--ref-mode", choices=("turbo", "full"), default="full",
-                   help="full: 20 steps; turbo: the bf16 model with LightX2V's 4-pass adapter")
+    v.add_argument("--ref-mode", choices=("turbo", "full", "vsa"), default="full",
+                   help="full: 20 steps; turbo: the bf16 model with LightX2V's 4-pass adapter; "
+                        "vsa: supervised experimental native Windows recipe only")
     v.add_argument("--ref-size", choices=("match", "max"), default="match",
                    help="match: references scaled down to the clip's pixel area (what the adapter was trained with); "
                         "max: up to 2048 pixels on the short edge, several times slower")

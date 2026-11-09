@@ -1516,6 +1516,9 @@ def job_fit(job: dict, room: int | None = None) -> dict | None:
     available memory and Bolt's 8 GB floor. memory_manager.admit asks this before the job loads anything."""
 
     kind, params = job["kind"], job["params"]
+    if (WINDOWS or WIN32) and kind == "video-vsa":
+        import windows_video_vsa
+        return windows_video_vsa.memory_fit(frames=job["params"].get("frames", windows_video_vsa.FRAMES))
     if not SPARK:
         free = voice.mem_available_gb()
         if free < 0 or kind not in bolt.MAC_PEAK_GB:
@@ -1689,6 +1692,12 @@ def build(kind: str, params: dict, job_id: str, room: bool = True) -> tuple[list
     clip renders on another Spark, whose own guard is asked (sparks.py)."""
 
     if (WINDOWS or WIN32) and windows_runtime.bounded(kind, params):
+        if kind == "video-vsa":
+            import windows_video_vsa
+            try:
+                return windows_video_vsa.build(HOME, params, job_id)
+            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+                raise HTTPException(400, str(error)) from None
         if kind == "qualification":
             return windows_checks.build(HOME, params, job_id)
         if kind == "foley":
@@ -2567,6 +2576,12 @@ def state() -> dict:
             "bolt": bolt.summary(),
             "engine": ("CUDA · SD-Turbo (512x512 only)" if windows_storyboard.status()["available"] else "unavailable (Windows UI-only preview)") if WINDOWS else ("CUDA · TensorFold int8" if SPARK_ENGINE_LIB.exists() else "CUDA · ComfyUI") if SPARK else ("native Zig engine" if zig_ready() else "MLX engine")}
     if local_windows:
+        import windows_video_vsa
+        out["windows_vsa"] = windows_video_vsa.route_status(windows_video_vsa.status(), selected_mode)
+        out["windows_vsa"]["lengths"] = [windows_video_vsa.status(frames) for frames in windows_video_vsa.CALIBRATION_FRAMES]
+        for row in out["windows_vsa"]["lengths"]:
+            row["available"] = out["windows_vsa"]["available"] and row["installed"]
+        out["windows_vsa"]["qualification_summary"] = windows_video_vsa.sweep_summary(out["windows_vsa"]["lengths"])
         out["image_model_options"] = choices
         out["windows_runtime"] = {"qualification": selected_mode, "image_models": choices,
                                   "backend": "per-feature", "native_core": windows_cuda.status()}
@@ -2800,6 +2815,12 @@ def queue_job(body: dict) -> dict:
             except ValueError as error:
                 raise HTTPException(400, str(error)) from None
     if (WINDOWS or WIN32) and windows_runtime.bounded(body["kind"], body["params"]):
+        if body["kind"] == "video-vsa":
+            if body.get("placement") is not None or body.get("sparks") not in (None, 1):
+                raise HTTPException(400, "Experimental VSA runs on this machine only.")
+            if body.get("title") is not None and not isinstance(body["title"], str):
+                raise HTTPException(400, "title is text")
+            return enqueue("video-vsa", body.get("title") or "Experimental Ref2VA VSA", body["params"])
         if body.get("kind") == "foley":
             found = windows_runtime.usage_status("foley")
             if not found["available"]:
@@ -3567,6 +3588,15 @@ def enqueue(kind: str, title: str, params: dict, estimate: int | None = None) ->
             except ValueError as error:
                 raise HTTPException(400, str(error)) from None
     local_bounded = (WINDOWS or WIN32) and windows_runtime.bounded(kind, params)
+    if local_bounded and kind == "video-vsa":
+        import windows_video_vsa
+        try:
+            params = windows_video_vsa.require(params)
+            build(kind, params, "check")
+        except windows_runtime.RouteUnavailable as error:
+            raise HTTPException(501, str(error)) from None
+        except (OSError, ValueError, RuntimeError) as error:
+            raise HTTPException(400, str(error)) from None
     if WINCUDA and kind != "qualification" and windows_cuda.unsupported(kind):
         raise HTTPException(501, windows_cuda.unsupported(kind))
     if (WINDOWS or WIN32) and kind == "qualification":

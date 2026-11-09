@@ -393,10 +393,11 @@ function takeSheet() {
 }
 // what the prompt goes to, as one small control over Create: the Image and Video rooms open it already set
 function intentBar() { const opts = { video: "Video with sound", image: "Image", edit: "Edit a picture" };
-  const marks = C.goes === "video" ? [mark("minimax"), S && S.platform === "spark" ? mark("comfy") : null, mark("tensorfold")] : [mark("qwen", "Qwen 2.1"), mark("flux")];
+  const marks = C.goes === "video" ? [mark("minimax"), C.videoBackend === "vsa" || S && S.platform === "spark" ? mark("comfy") : null,
+    C.videoBackend === "vsa" ? null : mark("tensorfold")] : [mark("qwen", "Qwen 2.1"), mark("flux")];
   return el("div", { class: "createbar" }, el("span", { class: "eyebrow" }, "The prompt goes to"),
     el("div", { class: "seg-ctl", role: "tablist", "aria-label": "The prompt goes to" }, Object.entries(opts).map(([k, label]) => el("button", { type: "button", role: "tab", "aria-selected": C.goes === k ? "true" : "false", class: C.goes === k ? "on" : "",
       onclick: () => { if (C.goes === k) return; C.goes = k; C.step = 0; changed(); } }, label))),
     el("div", { class: "marks" }, marks)); }
-function createLayout(node) { const bar = intentBar(); if (C.goes === "edit") return el("div", {}, bar, node);
+function createLayout(node) { const bar = intentBar(); if (C.goes === "edit" || C.goes === "video" && C.videoBackend === "vsa") return el("div", {}, bar, node);
   return el("div", {}, bar, el("div", { class: "split", style: "grid-template-columns:minmax(0,1fr) 330px" }, node, takeSheet())); }

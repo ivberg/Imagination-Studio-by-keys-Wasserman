@@ -285,7 +285,7 @@ function setAbout() { if (!SET.about && typeof updRequest === "function") { SET.
       "NVIDIA: Nemotron 3.5 Bolt and its LiLiCorr drafter (the Studio's brain engine) · MiaAI-Lab (with ChriZzn): the Bolt TensorFold recipe for the DGX Spark, its libbolt and LiLiCorr drafter runtime",
       "antirez: h3.c · RobZombAI: H3MLX · mrbizarro: minimax-h3-mlx (Phosphene) · Filip Strand and the mflux contributors · felix-ab: flux3-mlx",
       "comfyanonymous, Comfy Org and the ComfyUI contributors: ComfyUI, and Comfy Org's MOSS-Image and MiniMax-Music-3 files · Apple: MLX · mlx-vlm · Qwen team: Qwen3-VL · VisualInference",
-      "NVIDIA Research: Sol · FastVideo (Hao AI Lab): FastH3 · LightX2V (ModelTC) · larryvrh · TaoLiveAIGC · Viggle · speach1sdef178 · rookiestar28 · ddalcu · Kijai · DeepBeepMeep",
+      "NVIDIA Research: Sol · FastVideo (Hao AI Lab): FastH3 · Kablex: experimental Ref2VA VSA · barelymining: FastH3 gate packaging · LightX2V (ModelTC) · larryvrh · TaoLiveAIGC · Viggle · speach1sdef178 · rookiestar28 · ddalcu · Kijai · DeepBeepMeep",
       "The Library's actions: MATLOWAI (H3 Contact Sheet) · dntpi / Sandpies (H3 Video Upsampler) · LBH-123-AI · bbaudio-2025 · Alissonerdx · Akatz Labs (H3 Relay, Person Remover, Character Swap LoRA and workflow) · Meta: SAM 3.1 · Comfy Org: Openjutsu (the idea of Character Swap)",
       "Motion Previs: Sam Wasserman's Motion Previs Studio · Google: MediaPipe · Lihe Yang et al.: Depth Anything (Xenova's ONNX conversion) · OpenCV · Microsoft: ONNX Runtime",
       "MMAudio's models: Apple DFN5B CLIP · Synchformer (Iashin et al.) · NVIDIA BigVGAN v2 · Google: T5 · the SGLang-Omni team and Descript: Fish's codec on a Spark",

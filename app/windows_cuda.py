@@ -29,7 +29,7 @@ MIN_POOL_MB = 90_000  # FastH3 at 864x480 on the int8 engine peaks near 58 GB; a
 # job kinds the native tier runs (the rest are refused with NOT_NATIVE's reason): the Spark's video, picture, song,
 # sound and voice routes, and what the preview tier already runs (exports, graphics, beats)
 NATIVE = {"video", "studio", "long", "scout", "edit", "export", "soundtrack", "voice", "music", "sfx", "graphics", "hlg",
-          "turnaround", "upscale", "mask", "remove", "swap", "foley", "finish", "train"}
+          "turnaround", "upscale", "mask", "remove", "swap", "foley", "finish", "train", "video-vsa"}
 # none left: every job kind of the Spark path has a native port. A kind added to the Spark later and not ported is
 # refused (unsupported) with the reason written here, never sent to WSL or to a Linux script.
 NOT_NATIVE: dict[str, str] = {}

@@ -21,8 +21,12 @@ import windows_image_checks as images
 import windows_audio_checks as audio
 import windows_setup_fit
 import windows_library_checks as library
+import windows_video_vsa as vsa
 
 CHECKS = {
+    vsa.KIND: FeatureCheck(vsa.KIND, vsa.TITLE, vsa.SCOPE,
+                          tuple(MemoryRequirement(pool, None, "unknown") for pool in ("host", "device", "commit")),
+                          group="video"),
     **{kind: FeatureCheck(kind, library.TITLES[kind],
                          "Production Library workflow on pinned bundled media; only its tested input/settings are enabled.",
                          tuple(MemoryRequirement(pool, None, "unknown") for pool in ("host", "device", "commit")),
@@ -60,11 +64,18 @@ def gpu_check(job: dict) -> bool:
 
 
 def native_image_check(job: dict) -> bool:
-    return job["kind"] == "qualification" and job["params"].get("feature") in (*images.KINDS, *audio.KINDS, *library.KINDS)
+    return job["kind"] == vsa.KIND or job["kind"] == "qualification" and job["params"].get("feature") in (
+        *images.KINDS, *audio.KINDS, *library.KINDS, vsa.KIND)
 
 
 def timeout_seconds(job: dict) -> int:
     if native_image_check(job):
+        if job["kind"] == vsa.KIND or job["params"].get("feature") == vsa.KIND:
+            if job["kind"] == "qualification" and job["params"].get("sweep"):
+                return vsa.SWEEP_TIMEOUT_S + 180
+            if job["kind"] == vsa.KIND and "sequence_seconds" in job["params"]:
+                return vsa.SEQUENCE_TIMEOUT_S + 180
+            return vsa.TIMEOUT_S + 180
         params = job["params"]
         if params["feature"] in library.KINDS:
             return library.TIMEOUT_S + 180
@@ -77,14 +88,25 @@ def timeout_seconds(job: dict) -> int:
 
 def save_outcome(job: dict) -> None:
     kind = job["params"]["feature"]
+    if kind == vsa.KIND:
+        kind = vsa.SWEEP_KIND if job["params"].get("sweep") else vsa.evidence_kind(job["params"].get("frames", vsa.FRAMES))
     previous = features.saved(kind, "-attempt")
     same_job = previous.get("job_id") == job["id"]
     saved = previous if same_job else {}
     error = saved.get("error") if job["status"] == "failed" else None
     if error:
         job["error"] = error
-    features.save_attempt(kind, {**saved, "job_id": job["id"], "ok": False, "state": job["status"],
-                                 "finished": job["finished"], "error": error or job.get("error") or "The check was cancelled."})
+    outcome = {**saved, "job_id": job["id"], "ok": False, "state": job["status"],
+               "finished": job["finished"], "error": error or job.get("error") or "The check was cancelled."}
+    if kind == vsa.SWEEP_KIND:
+        outcome["finished_at"] = datetime.fromtimestamp(job["finished"], timezone.utc).isoformat()
+        if saved.get("active_frames") is not None and not saved.get("stop"):
+            frames = saved["active_frames"]
+            outcome["stop"] = {"frames": frames, "seconds": frames / 24, "reason": outcome["error"]}
+        report = library.studio_home() / "exports" / f"{job['id']}-qualification.json"
+        vsa.save_sweep(outcome, report)
+    else:
+        features.save_attempt(kind, outcome)
     scope = saved.get("scope") or job["params"].get("scope")
     if kind in images.KINDS and scope in images.SCOPES:
         features.save_attempt(f"{kind}-{scope}", features.saved(kind, "-attempt"))
@@ -101,6 +123,18 @@ def discovery(supported: bool) -> dict:
 def parameters(params: dict) -> dict:
     if not isinstance(params, dict) or "feature" not in params or params["feature"] not in CHECKS:
         raise HTTPException(400, "choose a registered feature for this qualification check")
+    if params["feature"] == vsa.KIND:
+        try:
+            if "sweep" in params:
+                if params["sweep"] is not True or set(params) != {"feature", "sweep"}:
+                    raise ValueError("An automatic VSA sweep accepts only feature and sweep: true; lengths are chosen automatically.")
+                return {"feature": vsa.KIND, "sweep": True}
+            frames = vsa.calibration_frames(params.get("frames", vsa.FRAMES))
+            if set(params) - {"feature", "frames"}:
+                raise ValueError("VSA calibration accepts only feature and frames; its canvas and recipe stay fixed.")
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from None
+        return {"feature": vsa.KIND} | ({"frames": frames} if frames != vsa.FRAMES else {})
     if params["feature"] in images.KINDS:
         if set(params) - {"feature", "scope", "group"} or "scope" in params and "group" in params:
             raise HTTPException(400, "Choose a registered image qualification level.")
@@ -121,6 +155,18 @@ def parameters(params: dict) -> dict:
 def build(home, params, job_id):
     params = parameters(params)
     kind = params["feature"]
+    if kind == vsa.KIND:
+        if why := vsa.prerequisites():
+            raise HTTPException(400, why)
+        target = home / "exports" / f"{job_id}-qualification.json"
+        output = home / "renders" / "calibration" / job_id
+        if params.get("sweep"):
+            return [sys.executable, "-X", "utf8", str(features.PACK / "scripts" / "windows-vsa-check.py"),
+                    "--sweep", "--job-id", job_id, "--output", str(output), "--report", str(target)], {}, [str(target)]
+        return [sys.executable, "-X", "utf8", str(features.PACK / "scripts" / "windows-vsa-check.py"),
+                "--qualify", "--frames", str(params.get("frames", vsa.FRAMES)),
+                "--job-id", job_id, "--output", str(output), "--report", str(target)], {}, [
+                    str(target), str(output / "video.mp4")]
     if kind in library.KINDS:
         if why := library.prerequisites(kind):
             raise HTTPException(400, why)
@@ -202,7 +248,7 @@ def attach(server):
             current = [server.public(job) for job in server.jobs.values()
                        if job["kind"] == "qualification"]
         for kind in CHECKS:
-            if kind in (*images.KINDS, *audio.KINDS, *library.KINDS):
+            if kind in (*images.KINDS, *audio.KINDS, *library.KINDS, vsa.KIND):
                 continue
             found = foley if kind == "foley" else windows_runtime.usage_status(kind, selected_mode=selected_mode)
             try:
@@ -281,6 +327,21 @@ def attach(server):
                           "setup": windows_cuda.setup_hint("swap,h3-shared" if kind == "swap" else
                                                            "workflows" if kind == "mask" else
                                                            "workflows,library-h3,h3-shared")})
+        found = vsa.status()
+        receipt = features.saved(vsa.KIND, "")
+        cards.append({**CHECKS[vsa.KIND].public(), **found, "backend": "native-vsa",
+                      "open_tab": "Create", "open_label": "Open experimental VSA",
+                      "memory": {"minimum_installed_ram_mb": None, "minimum_label": "Full-model memory must be measured locally",
+                                 "gpu_required": True, "job_commit_cap_mb": None,
+                                 "lowest_tested_ram_mb": found.get("hardware", {}).get("physical_total_mb")},
+                      "evidence": {"matches": found["qualified"], "checked_at": receipt.get("checked_at"),
+                                   "results": receipt.get("results", [])},
+                      "attempt": features.saved(vsa.KIND, "-attempt"),
+                      "job": max((job for job in current if job["params"].get("feature") == vsa.KIND
+                                  and not job["params"].get("sweep")
+                                  and job["params"].get("frames", vsa.FRAMES) == vsa.FRAMES),
+                                 key=lambda job: job["created"], default=None),
+                      "setup": r"powershell -ExecutionPolicy Bypass -File scripts\setup-windows-vsa.ps1"})
         video = windows_runtime.native_status("video", selected_mode)
         cards.append({"id": "video", "title": "H3 / FastH3 video", "group": "video", **video,
                       "scope": f"The existing H3 policy requires a measured CUDA allocation pool of at least {windows_cuda.MIN_POOL_MB} MiB. This is not a minimum installed-RAM claim.",
@@ -356,6 +417,11 @@ def attach(server):
                 if (job["kind"] == "qualification" and job["params"].get("feature") == kind
                         and job["status"] in ("queued", "running")):
                     raise HTTPException(409, "This feature check is already queued or running.")
-        return server.enqueue("qualification", "Check " + CHECKS[kind].title, params)
+        title = "Check " + CHECKS[kind].title
+        if kind == vsa.KIND and params.get("sweep"):
+            title += " (automatic clip lengths)"
+        elif kind == vsa.KIND and params.get("frames", vsa.FRAMES) != vsa.FRAMES:
+            title += f" ({params['frames']} frames, calibration only)"
+        return server.enqueue("qualification", title, params)
 
     return router

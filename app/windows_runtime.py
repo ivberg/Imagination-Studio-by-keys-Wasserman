@@ -14,7 +14,7 @@ import model_catalog
 from windows_memory import physical_memory_mb
 
 OPTIONAL_QUALIFICATION_MB = 128 * 1024
-_SESSION_KEY = uuid.uuid4().hex
+_SESSION_KEY = os.environ.get("STUDIO_WINDOWS_SESSION_KEY") or uuid.uuid4().hex
 BOUNDED = ("scout", "sfx", "foley", "hlg", "finish", "graphics")
 IMAGE_SPECS = model_catalog.image_specs()
 
@@ -41,6 +41,10 @@ def release_native() -> bool:
                           capture_output=True, text=True, timeout=60, creationflags=0x08000000 if windows_cuda.native_os() else 0)
     if done.returncode:
         raise RuntimeError("The owned native ComfyUI backend did not stop: " + done.stderr[-500:])
+    handle = comfy_win.open_recorded(identity)
+    if handle is not None:
+        comfy_win._kernel().CloseHandle(handle)
+        raise RuntimeError("The owned native ComfyUI backend reported stop but its recorded process is still running.")
     return True
 
 
@@ -139,7 +143,7 @@ def native_sound_installed(kind: str) -> bool:
 
 
 def bounded(kind: str, params: dict | None = None) -> bool:
-    if kind == "qualification" or kind == "graphics":
+    if kind in ("qualification", "graphics", "video-vsa"):
         return True
     if kind == "scout":
         model = (params or {}).get("image_model") or default_image()
@@ -298,6 +302,10 @@ def video_missing(params: dict | None = None) -> list[str]:
 
 
 def require_native(kind: str, params: dict) -> None:
+    if kind == "video-vsa":
+        import windows_video_vsa
+        windows_video_vsa.require(params)
+        return
     import windows_library_checks as library
     if kind in library.KINDS:
         found = library.usage_status(kind)

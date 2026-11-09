@@ -266,10 +266,13 @@ def run_case(model: str, output: Path, observations: dict | None = None, scope: 
     return observe_native(command, output, validate, result, timeout_seconds(model, scope))
 
 
-def observe_native(command: list[str], output: Path, validate, result: dict, timeout_s: int) -> dict:
+def observe_native(command: list[str], output: Path, validate, result: dict, timeout_s: int,
+                   pressure_policy=native_pressure, dedicated_floor_mb: int | None = None) -> dict:
     """Supervise a native production subprocess under owned lifetime and fresh Windows memory readings."""
     import windows_storyboard
     from windows_process import OwnedJob
+    if dedicated_floor_mb is not None and (type(dedicated_floor_mb) is not int or dedicated_floor_mb <= 0):
+        raise ValueError("The dedicated-memory observer floor must be a positive integer.")
 
     tools = windows_storyboard.tools().checker()
     output.mkdir(parents=True, exist_ok=True)
@@ -281,7 +284,7 @@ def observe_native(command: list[str], output: Path, validate, result: dict, tim
     try:
         with (output / "native-image.log").open("w+", encoding="utf-8") as log:
             try:
-                monitor = tools.MemoryWatchdog(job, 0, log, wddm_device_uuid=device_uuid(), pressure_policy=native_pressure)
+                monitor = tools.MemoryWatchdog(job, 0, log, wddm_device_uuid=device_uuid(), pressure_policy=pressure_policy)
                 monitor.budget_basis = "Native production guard plus independent host/WDDM observation"
                 monitor.wait_ready()
             except RuntimeError as error:
@@ -326,7 +329,7 @@ def observe_native(command: list[str], output: Path, validate, result: dict, tim
                 if monitor.initial is not None:
                     import comfy_win
                     result["measurements"] = {**monitor.metrics(), "cuda_floor_mb": None,
-                                              "dedicated_floor_mb": comfy_win.DEDICATED_FLOOR_MB,
+                                              "dedicated_floor_mb": dedicated_floor_mb if dedicated_floor_mb is not None else comfy_win.DEDICATED_FLOOR_MB,
                                               "host_policy": "Native host/commit/dedicated floors; strict two-second observer freshness"}
                 result["peak_job_commit_mb"] = job.commitment()["peak_job_commit_bytes"] / 2 ** 20
             except (OSError, RuntimeError) as error:

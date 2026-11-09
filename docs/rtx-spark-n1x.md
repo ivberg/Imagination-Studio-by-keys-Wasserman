@@ -6,6 +6,150 @@ graphs and TensorFold's engines) on Windows' own NVIDIA driver. There is no WSL 
 on 2026-11-06. The dated measurements below that compare with WSL are kept as they were taken.
 What differs from a DGX Spark is the laptop's memory split and its power budget.
 
+## Experimental Ref2VA VSA on a smaller memory partition
+
+This is a **separately selected experiment**, not a lower memory limit for supported H3. The normal H3
+`MIN_POOL_MB` policy remains 90,000 MiB. Installed RAM, Windows commit headroom and dedicated GPU memory are
+different budgets; they are never added together to make a render fit.
+
+With the native CUDA/ComfyUI core and the recipe's weights already installed:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup-windows-vsa.ps1
+```
+
+This installs only Kablex's pinned Apache-2.0 custom node, retaining its licence. It does not download weights,
+install packages or build H3. The required filenames and folders are in [the experimental recipe](../app/windows_video_vsa.py):
+INT8 ConvRot Ref2VA, NVFP4/AWQ Qwen3VL-32B, FP16 video VAE, FP32 audio VAE, the Ref2VA four-step Turbo adapter
+and the FastH3 VSA gate. MiniMax H3's Community License and territory restrictions still apply.
+
+Restart the **real Studio**, then open **Video -> Experimental Ref2VA VSA**, or choose that backend in Create.
+**Machine -> Feature check: experimental Ref2VA VSA** queues the same explicit check. The API equivalent is:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:7870/api/feature-checks/check -Method Post `
+  -ContentType application/json -Body '{"feature":"video-vsa"}'
+```
+
+The first check uses the bundled baker picture, resized in that job to 512x288. It generates **864x480,
+22 frames at 24 fps (0.917 seconds), four Euler passes, sparsity 0.75**, with video/audio sigma shifts 12/3.
+Text, reference and audio tokens remain dense. Only generated-video attention is sparse.
+Every render is cold: gate transplantation mutates model modules, so a patched backend is never reused.
+
+No successful local full-model render means **unverified**, even if synthetic adapter or CUDA primitive tests
+passed. A pass saves actual host, commitment and WDDM observations plus model checksums and runtime provenance.
+With qualification enabled, only the basic 22-frame check is required for the queue's `video-vsa` kind
+(`image`, `prompt`, `seed`, optional `frames`). All model-valid lengths are selectable afterward, including
+unmeasured ones. Use one Studio picture at most 512x288, named `<Picture 1>` in your prompt. Ordinary H3,
+other canvases, additional LoRAs, reference video/audio and worker placement remain outside this recipe.
+With qualification disabled there is no evidence gate or qualification UI. At 128 GiB installed memory
+and above it is disabled by default; opting in restores the basic gate and diagnostic panel. Installation,
+recipe limits and all live memory guards apply in either mode.
+
+The native dynamic-VRAM loader and handle-owned process tree remain in use. The independent observer and server
+guard fail closed on missing/stale Windows/WDDM readings. Host and commit floors are retained, with a 2 GiB
+dedicated GPU reserve. The experimental dynamic loader additionally requests 3 GiB of unused VRAM headroom
+(`--vram-headroom 3`); this constrains loading rather than weakening the guard. Future admission uses matching
+measured **commit** growth plus a 1 GiB error margin, not a combined RAM/VRAM allowance.
+Historical host and GPU resident growth are saved as **advisory predictions**, including their error margins:
+Windows can reclaim file-backed pages and page other working sets, while DynamicVRAM adapts weight residency.
+A prior drop in available physical RAM or resident GPU peak is not a fixed nonpageable allocation requirement.
+Short resident predictions do not block admission if measured commit capacity and live floors pass.
+The same live 2 GiB host/GPU reserves (or higher configured host floor), 4 GiB commit floor, 3 GiB loader headroom
+and independent physical/commit/WDDM supervision remain enforced. Paging is not guaranteed to prevent pressure;
+an OS low-memory signal or breached live floor still stops the owned render.
+An unmeasured length has an unknown peak: it is admitted on live floors and independently supervised,
+not assigned the shorter clip's memory profile. A memory refusal is a blocker, never a reason to relax the floors.
+The saved observations establish resource safety for this short recipe, **not visual fidelity or a laptop
+throughput claim**. Neither the author's RTX 4090 benchmark nor synthetic kernel results qualify larger clips.
+
+### Incremental frame calibration
+
+The length chooser exposes **all 21 model-valid counts from 22 to 362 frames** (0.917 to 15.083 seconds),
+at the same 864x480 canvas, four passes and sparsity. Unmeasured lengths are selectable for your own explicit
+checks, not labelled measured. When qualification is enabled, first pass the 22-frame baseline, then select
+any valid length and render. **Check the N-frame recipe** is optional: each length can have independent
+evidence and measured admission, but missing longer-length evidence never blocks selection or rendering.
+
+For incremental testing, start with **39, 56, then 73 frames**. Wait for each job to finish successfully
+before queuing the next, and stop on any failure or memory refusal.
+All existing host, commit and dedicated GPU floors remain unchanged.
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:7870/api/feature-checks/check -Method Post `
+  -ContentType application/json -Body '{"feature":"video-vsa","frames":39}'
+```
+
+Repeat with 56, then 73 only after the previous check passes. These durations are exactly frames / 24:
+1.625, 2.333 and 3.042 seconds. Reports and memory observations are saved separately by frame count,
+using verified model checksums from the baseline rather than hashing unchanged weights again.
+Neither a successful longer calibration nor a failed attempt replaces another length's production receipt.
+Normal renders can specify any valid count, for example `frames: 39`; omission keeps the 22-frame default.
+The selectable maximum is the model's limit, **not a claim that this laptop can render it**.
+
+### Automatic clip-length qualification on this machine
+
+Use **Qualify clip lengths automatically** in the experimental VSA panel, or:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:7870/api/feature-checks/check -Method Post `
+  -ContentType application/json -Body '{"feature":"video-vsa","sweep":true}'
+```
+
+The Studio checks the 21 model-valid counts in increasing order, through **362 frames / 24 = 15.083 seconds**.
+Matching local passes are reused with their original dates; unverified counts get cold, independently supervised
+renders with generated clip audio. A missing baseline is checked first. It stops at the first memory refusal,
+telemetry problem, render error, timeout or cancellation, never intentionally at OOM and never by lowering a floor.
+The sweep has a two-hour total budget plus cleanup; each render keeps its existing 30-minute upper bound.
+
+Qualification is tied to this machine's actual hardware partition, recipe, weights and execution contract, not
+just installed RAM. A 128 GB install can use this experimental model without qualifying ordinary H3 or
+obtaining qualification evidence when qualification is disabled. Host, commitment and dedicated GPU
+budgets remain separate. This does **not** qualify separate sound-effects/Foley models or concurrent model residency.
+
+When qualification is enabled, the panel shows the **highest successful matching clip and its original date**,
+including supervised production renders as well as feature checks. Production successes are diagnostics,
+not fabricated qualification receipts. It also shows how many counts have separate feature checks and the
+first stopped candidate with its reason and sweep date. A higher previous pass remains valid if a new sweep stops
+at a lower unverified count; neither the highest success nor a gap is a selectable-length cap.
+A stop under current contention, missing telemetry
+or a model error is **not the machine's absolute memory limit**. If every count passes, the model's 15.083-second
+single-clip bound still applies. Current progress and partial results persist in the job's qualification report;
+individual successful receipts survive failure or cancellation. No automatic retry follows a stop.
+
+### Experimental sequences up to one minute
+
+Select **Sequence up to 60 seconds** in the VSA backend. With qualification enabled, the chooser initially selects
+the longest separately checked per-shot length; all other valid lengths remain selectable. With qualification
+disabled it keeps your selected length. Enter a whole-number duration from **1 to 60 seconds**.
+This is a sequence of short shots, **not one continuous model render**. Picture and sound joins may be visible.
+Longer sequences and seamless continuity have not been qualified on this laptop; individual short-clip passes
+do not establish their visual quality.
+
+The normal Studio queue runs every part serially, with the mode-dependent basic gate, fresh memory admission,
+unchanged host/commit/dedicated floors, and a cold owned backend. The first shot uses your reference picture;
+later ones use a resized copy of the preceding shot's last frame. That picture is a reference, **not a guaranteed
+first-frame anchor**. The prompt stays unchanged; seeds increment per shot, wrapping at the 32-bit limit.
+No duplicate initial frame is discarded: Ref2VA does not guarantee one.
+
+The supervisor inherits the app's private session identity so a between-part release really drains its owned
+backend. Before each part it waits up to **60 seconds** for memory recovery, requiring **two consecutive fresh
+samples** to satisfy measured commit admission and all live floors. Missing/stale telemetry or a live floor violation fails closed;
+persistent contention stops the chain with the last reason rather than waiting indefinitely. Recovery is included
+in the two-hour sequence budget and its initial/final readings are saved with the part's observations.
+The backend is also drained before CPU assembly. No foreign application is stopped or memory floor lowered.
+
+The API uses the existing `video-vsa` job with `image`, `prompt`, `seed`, `frames` (per shot) and
+`sequence_seconds` (1-60). For example, 60 seconds at 73 frames per shot needs 20 full model clips.
+CPU-only ffmpeg joins them and trims the result to exactly 1440 video frames at 24 fps with sound.
+The assembly is independently memory-supervised and all external tools have deadlines. No render bypasses the queue.
+
+There is a **two-hour sequence budget**, plus owned-process cleanup time, and the existing per-part deadline.
+Cold loads can dominate the runtime. A memory refusal, failed part, timeout or cancellation stops the sequence;
+finished clips remain under the job's `parts` folder. There is no automatic retry or resume. `sequence.json`
+records completed parts, seeds, observations and completion/failure; the final `video.mp4` is published only after
+assembly and exact-frame validation. Ordinary single clips and the normal H3 memory policy are unchanged.
+
 <a id="install-one-shot-natively"></a>
 
 ## Install: one shot

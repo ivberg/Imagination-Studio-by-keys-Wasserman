@@ -342,6 +342,48 @@ def test_native_comfy_ownership_rejects_other_session_before_opening_pid(monkeyp
     assert comfy_win.start() == 1
 
 
+@pytest.mark.parametrize("inherited", [True, False])
+def test_native_supervisors_preserve_inherited_session_identity(monkeypatch, inherited):
+    import runpy
+    import comfy_win
+    if inherited:
+        monkeypatch.setenv("STUDIO_WINDOWS_SESSION_KEY", "synthetic-parent-session")
+    else:
+        monkeypatch.delenv("STUDIO_WINDOWS_SESSION_KEY", raising=False)
+    child = runpy.run_path(str(ROOT / "app" / "windows_runtime.py"))
+    key = child["session_env"]()["STUDIO_WINDOWS_SESSION_KEY"]
+    if inherited:
+        assert key == "synthetic-parent-session"
+    else:
+        assert key and key == child["session_env"]()["STUDIO_WINDOWS_SESSION_KEY"]
+    identity = {"pid": 123, "created": 456, "session": hashlib.sha256(key.encode()).hexdigest()}
+    monkeypatch.setattr(comfy_win, "recorded", lambda: identity)
+    monkeypatch.setattr(comfy_win, "running", lambda: True)
+    monkeypatch.setattr(comfy_win, "open_recorded", lambda expected: None)
+    calls = []
+    monkeypatch.setattr(runtime.subprocess, "run", lambda command, **kwargs:
+                        calls.append(kwargs["env"]["STUDIO_WINDOWS_SESSION_KEY"]) or SimpleNamespace(returncode=0))
+    assert child["release_native"]()
+    assert calls == [key]
+    monkeypatch.setattr(comfy_win, "recorded", lambda: {**identity, "session": "foreign-session"})
+    assert not child["release_native"]()
+    assert calls == [key]
+
+
+def test_native_release_rejects_stop_success_when_the_owned_process_is_still_alive(monkeypatch):
+    import comfy_win
+    identity = {"pid": 123, "created": 456, "session": hashlib.sha256(runtime._SESSION_KEY.encode()).hexdigest()}
+    monkeypatch.setattr(comfy_win, "recorded", lambda: identity)
+    monkeypatch.setattr(comfy_win, "running", lambda: True)
+    monkeypatch.setattr(runtime.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(comfy_win, "open_recorded", lambda expected: "owned-handle")
+    closed = []
+    monkeypatch.setattr(comfy_win, "_kernel", lambda: SimpleNamespace(CloseHandle=closed.append))
+    with pytest.raises(RuntimeError, match="still running"):
+        runtime.release_native()
+    assert closed == ["owned-handle"]
+
+
 def test_comfy_guard_trims_before_host_pressure_can_stop_the_render():
     import comfy_win
     clock = [100.0]
