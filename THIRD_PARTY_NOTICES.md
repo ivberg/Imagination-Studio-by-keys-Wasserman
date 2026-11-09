@@ -6,6 +6,18 @@ packages and models are downloaded by `scripts/setup-motion.sh` (`oneshot-setup.
 `$PREFIX/motion-venv` and `$PREFIX/motion-models`. The notices for the rest of the pack are in [NOTICE](NOTICE) and
 [CREDITS.md](CREDITS.md).
 
+## Experimental native Windows Ref2VA VSA
+
+**Kablex**'s **ComfyUI-Ref2VA-VSA**, commit `323a0a5f7c636cc70f95464145732f81f04a72e9`, is installed separately
+by `scripts/setup-windows-vsa.ps1`; none of its source is copied into this repository. Its Apache-2.0 LICENSE is
+retained in the installed node folder. ComfyUI remains a separate GPL-3.0 program. Sol-Attention is invoked through
+the installed comfy-kitchen CUDA backend.
+
+The recipe uses Comfy Org's INT8 ConvRot Ref2VA transformer, NVFP4/AWQ text encoder and H3 decoders,
+**LightX2V**'s four-step Ref2VA Turbo adapter, and **barelymining**'s packaging of **FastVideo**'s trained FastH3 gate.
+They are not redistributed here. MiniMax H3's Community License, including its territory restrictions, still
+governs the models; Apache-2.0 for the node does not grant additional model rights.
+
 ## Motion Previs Studio, by Sam Wasserman
 
 - Original: **Motion Previs Studio 4.1.0**, <https://github.com/wassermanproductions/motion-previs-studio>, read at

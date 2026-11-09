@@ -257,7 +257,9 @@ class Guard:
         self.at = 0.0
         self.error = ""
         # the sampler opens a CUDA context through torch: the GPU venv's python (this one, for the server)
-        self.process = job.spawn([python or sys.executable, "-X", "utf8", str(APP / "windows_memory.py"), "--watch", "--device-index", "0"],
+        provider = (["--wddm-only", "--device-uuid", windows_memory.single_gpu_uuid()]
+                    if os.environ.get("STUDIO_REF2VA_VSA") == "1" else ["--device-index", "0"])
+        self.process = job.spawn([python or sys.executable, "-X", "utf8", str(APP / "windows_memory.py"), "--watch", *provider],
                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
                                  encoding="utf-8", creationflags=NEW_GROUP | NO_WINDOW)
         threading.Thread(target=self.read, daemon=True).start()
@@ -363,6 +365,11 @@ def run() -> int:
     STATE.write_text(json.dumps({**own_identity(), "port": PORT, "session": session_identity(),
                                  "python": sys.executable}), encoding="utf-8")
     flags = (os.environ.get("SPARK_COMFY_ARGS") or "--use-ck-attention").split()
+    strict_vsa = os.environ.get("STUDIO_REF2VA_VSA") == "1"
+    if strict_vsa:
+        from windows_video_vsa import COMFY_FLAGS
+        if flags != list(COMFY_FLAGS):
+            raise RuntimeError("Experimental VSA requires CK attention and its fixed dynamic-VRAM headroom.")
     job = OwnedJob()
     try:
         server = job.spawn([sys.executable, "-X", "utf8", "main.py", "--listen", "127.0.0.1", "--port", PORT, *flags],
@@ -371,6 +378,8 @@ def run() -> int:
         try:
             guard = Guard(job, floor)
         except (OSError, RuntimeError) as error:
+            if strict_vsa:
+                raise RuntimeError(f"Experimental VSA could not start its WDDM memory guard: {error}") from error
             guard = None
             say(f"memory guard: the sampler could not start ({error}); holding a floor of free memory with a plain loop")
         plain = int(floor) if floor.isdigit() and int(floor) > 0 else 2048
@@ -389,6 +398,8 @@ def run() -> int:
             why = ""
             if guard is not None:
                 fresh = guard.latest is not None and time.monotonic() - guard.at < SAMPLE_STALE_S
+                if strict_vsa and fresh:
+                    fresh = 0 <= time.monotonic() - guard.latest.at <= 2
                 waiting = guard.latest is None and time.monotonic() - began < SAMPLE_WAIT_S
                 if fresh:
                     why = guard.reason(previous)
@@ -400,6 +411,8 @@ def run() -> int:
                             f"{s.gpu_dedicated_total_mb}), host {s.host_free_mb} of "
                             f"{s.host_total_mb} MB, commit {s.host_commit_used_mb} of {s.host_commit_limit_mb} MB")
                 elif not waiting:
+                    if strict_vsa:
+                        raise RuntimeError("Experimental VSA lost fresh WDDM/Windows memory readings: " + (guard.error or "no reading"))
                     say("memory guard: the sampler stopped answering (" + (guard.error or "no reading") +
                         f"); holding {plain} MB of free memory with a plain loop")
                     guard = None

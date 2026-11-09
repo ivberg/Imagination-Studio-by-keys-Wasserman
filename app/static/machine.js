@@ -464,6 +464,7 @@ function viewMachine() {
       el("div", { class: "panel" }, el("h2", {}, "Right now"), el("div", { id: "machstatus" }, el("div", { class: "note" }, "Waiting for the first reading…")),
         el("details", { class: "fold" }, el("summary", {}, "The memory guard"), el("div", { class: "note m-flat" }, where === "GPU" ? "The memory guard checks every clip before it is queued and again before a model loads, and refuses a clip that would leave the GPU under its floor. These readouts show what it sees; they do not change it." : "The memory guard checks every clip before it is queued and again before a model loads, and stops the renderer if memory falls under its floor. These readouts show what it sees; they do not change it."), memPanel()))));
   api("/api/telemetry/history").then(h => { M.history = (h.samples || []).map(s => ({ gpu: s.gpu, mem: s.mem })); if (SHELL.tel) machineLive(SHELL.tel); }).catch(() => {});
+  if (S.windows_vsa && typeof vsaCheckPanel === "function") put(wrap, vsaCheckPanel());
   setTimeout(() => { if (SHELL.tel) machineLive(SHELL.tel); }, 0);
   return wrap;
 }
