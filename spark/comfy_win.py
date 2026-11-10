@@ -240,6 +240,9 @@ def install_nodes(env: dict) -> None:
     if (nodes / "ComfyUI-MMAudio" / "nodes.py").is_file() and (HERE / "studio_mmaudio" / "__init__.py").is_file():
         (nodes / "studio_mmaudio").mkdir(parents=True, exist_ok=True)
         shutil.copyfile(HERE / "studio_mmaudio" / "__init__.py", nodes / "studio_mmaudio" / "__init__.py")
+    if os.environ.get("STUDIO_REF2VA_VSA") == "1":
+        (nodes / "studio_vsa_audit").mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(HERE / "studio_vsa_audit" / "__init__.py", nodes / "studio_vsa_audit" / "__init__.py")
 
 
 def say(line: str) -> None:

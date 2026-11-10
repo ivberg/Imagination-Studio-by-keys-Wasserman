@@ -27,10 +27,13 @@ def film(project_id: str) -> None:
     file.write_text(json.dumps({"id": project_id, "name": "one", "scenes": [{"id": "sc", "shots": [{"id": "sh1", "name": "opening"}]}]}))
 
 
-def test_a_hidden_clip_of_the_studio_folder_is_refused_as_a_take():
+@pytest.mark.parametrize("windows", [False, True])
+def test_a_hidden_clip_of_the_studio_folder_is_refused_as_a_take(monkeypatch, windows):
     """A take is copied into the film's folder, which the page downloads freely: a file /files keeps hidden must
     not arrive there by the side door (an upload's path, a stray .cache, the key folder #101 keeps there)."""
 
+    monkeypatch.setattr(server, "WINDOWS", windows)
+    monkeypatch.setattr(server.windows_runtime, "mode", lambda: {"enabled": True})
     pid = "p-hidden"
     film(pid)
     home = Path(server.HOME)

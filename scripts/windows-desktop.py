@@ -208,6 +208,8 @@ def stop_backend():
 
 
 def launch(backend: str):
+    from windows_process import hidden_venv_command
+
     config = read(home() / "desktop.json")
     chosen = registered(config).get(backend)
     if not chosen or not available(backend, chosen):
@@ -222,8 +224,9 @@ def launch(backend: str):
         python = Path(sys.executable)
     launch_id = uuid.uuid4().hex
     with (home() / "desktop-supervisor.log").open("a", encoding="utf-8") as log:
-        supervisor = subprocess.Popen([str(python), "-X", "utf8", str(Path(__file__).resolve()),
-                                       "supervise", "--backend", backend], stdin=subprocess.DEVNULL,
+        command = hidden_venv_command([str(python), "-X", "utf8", str(Path(__file__).resolve()),
+                                      "supervise", "--backend", backend], NO_WINDOW)
+        supervisor = subprocess.Popen(command, stdin=subprocess.DEVNULL,
                                       stdout=log, stderr=subprocess.STDOUT, creationflags=NO_WINDOW | 0x200,
                                       env={**os.environ, "STUDIO_DESKTOP_LAUNCH": launch_id})
     deadline = time.monotonic() + 180

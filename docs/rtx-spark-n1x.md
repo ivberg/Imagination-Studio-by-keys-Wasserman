@@ -50,6 +50,10 @@ the quality preset becomes the fixed four-pass recipe. Extra LoRAs, Drama 3 voic
 are refused, not dropped. VSA takes stay attached to the film with their backend, seed and actual recipe,
 and use the same take review and Editor delivery. Existing text, first-frame, previous-shot and cast-still
 modes keep supported H3; none are silently converted to VSA.
+Importing a finished clip as a Slate take is also available with Windows qualification enabled: it copies media,
+not a model render. The existing Studio-folder, hidden-file and remote-media restrictions still apply.
+The desktop supervisor uses the UI environment's `pythonw.exe` to avoid a venv console redirector window;
+the app's PowerShell entry point retains console Python and the supervisor's hidden process ownership.
 The simple Production board likewise offers **a VSA reference** in each segment's **Opens on**.
 It saves a separate picture path, requires the 864x480 output preset and refuses project LoRAs. The normal
 segment queue and Editor handoff retain the resulting clip; text, image and previous-segment modes are unchanged.
@@ -141,8 +145,46 @@ not an established cause.
 A subsequent fixed-seed A/B completed through the Studio queue at seed 1 and 73 frames. A reused the exact
 original prompt; B changed only `overall_soundscape` to concrete oven-fan, baking-tray and cloth sounds.
 The picture, greeting action, closed-mouth instruction and rendering recipe were unchanged. Both retained
-their guarded measurements and media; listening review is pending. Technical completion alone does not
-establish that the soundscape change prevents unwanted speech.
+their guarded measurements and media. Listening review heard unwanted dialogue in both, and B lacked the
+requested oven-fan and tray sounds. The soundscape-only change did not resolve this case. The greeting action
+remains a possible confound; neither technical completion nor this A/B establishes why the speech occurs.
+
+A further controlled clip removed only "in a small greeting" from A's action, retaining its original soundscape,
+picture, seed 1 and 73-frame recipe. It completed with 658 observer samples and no refused sample; minima were
+2480 MiB host available, 3448 MiB dedicated GPU free and 10974 MiB commit headroom. Listening review still heard
+unwanted, unintelligible speech. Removing the greeting wording did not resolve this audio-adherence failure;
+that wording alone does not explain it. The model/recipe/conditioning cause remains unestablished.
+
+Native VSA renders retain `video.workflow.json` and `video.conditioning.json` beside the clip for diagnosis.
+The Studio's pass-through audit node records the prompt hash, actual tokenizer IDs/reference types,
+conditioning and latent shapes, model sampling shifts, and the video sigma entering each forward. Audio
+sigmas/times are derived from those observed inputs with ComfyUI's own MiniMax shift helper, not read back
+from an internal per-token timestep tensor. It does not change the tokens, conditioning, model weights,
+sampler or returned tensors. These records are diagnostics, not audio-quality or qualification passes.
+
+Two 124-frame (5.167-second), seed-1 controls completed with that runtime audit: the unchanged neutral-action
+baker prompt, then an empty bakery with a place-only visual description and the same ambient soundscape.
+Both had matching prompt hashes, one image reference, no `<d>`/`</d>` tokenizer IDs and four forwards.
+Observed video sigmas were approximately `[1, 0.972973, 0.923077, 0.8]`; the derived audio sigmas were
+`[1, 0.9, 0.75, 0.5]`, matching the published four-pass 12/3-shift recipe. The model's audio scale was 4.
+No conditioning-input or schedule mismatch was identified; this does not verify the quantized encoder's
+semantic fidelity or establish audio quality. Listening review again heard foreign-language-like speech from
+the five-second baker (language not verified). The user clarified that the empty bakery had energetic,
+advertisement-like ambience with no voices. That case met the no-voices goal, though not the requested
+soft room ambience. Longer duration did not resolve the baker's unwanted speech. The empty bakery uses a new
+reference with different composition/aspect ratio, so it is a scene diagnostic, not a person-only causal test.
+The first submission was refused while the completed scout's owned backend was warm; the backend was
+explicitly unloaded through the Studio before retrying. Memory floors were not changed.
+
+A subsequent simplified-prompt control kept the baker reference, seed 1 and 124-frame recipe,
+replacing the subject/summary/retention sections with a short visual paragraph and retaining the
+same action, closed-mouth instruction and soundscape. Windows signalled low physical memory during
+execution; the watchdog stopped the owned job and no clip was produced. This is an inconclusive
+prompt comparison, not an audio failure or pass. No automatic retry or guard relaxation was made.
+A user-authorized identical retry subsequently completed at 124 frames (5.167 seconds).
+Its saved audit matched the submitted prompt hash, image-only reference and four-pass 12/3-shift
+recipe. Listening review still heard the baker speaking, now French-like to the listener
+(language not verified). Simplifying the prompt did not resolve unwanted speech in this case.
 
 A local 175-frame single clip (7.292 seconds) completed under these guards; its observed minima were
 3063 MiB host available, 3448 MiB dedicated GPU free and 5392 MiB commit headroom. These are one run,
