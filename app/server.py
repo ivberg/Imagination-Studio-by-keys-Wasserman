@@ -1985,7 +1985,7 @@ def run(job: dict, command: list[str], env: dict, label: str = "") -> bool:
                 process = owned.spawn(command, cwd=PACK, env=child_env, stdout=subprocess.PIPE,
                                       stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                                       stdin=subprocess.PIPE if "prompts" in job["params"] else subprocess.DEVNULL,
-                                      creationflags=0x08000000 if windows_checks.native_image_check(job) else 0)
+                                      creationflags=0x08000000)
             except (OSError, RuntimeError):
                 owned.close()
                 raise
@@ -2824,10 +2824,10 @@ def queue_job(body: dict) -> dict:
     if (WINDOWS or WIN32) and windows_runtime.bounded(body["kind"], body["params"]):
         if body["kind"] == "video-vsa":
             if body.get("placement") is not None or body.get("sparks") not in (None, 1):
-                raise HTTPException(400, "Experimental VSA runs on this machine only.")
+                raise HTTPException(400, "VSA runs on this machine only.")
             if body.get("title") is not None and not isinstance(body["title"], str):
                 raise HTTPException(400, "title is text")
-            return enqueue("video-vsa", body.get("title") or "Experimental Ref2VA VSA", body["params"])
+            return enqueue("video-vsa", body.get("title") or "Ref2VA VSA", body["params"])
         if body.get("kind") == "foley":
             found = windows_runtime.usage_status("foley")
             if not found["available"]:
@@ -3161,7 +3161,7 @@ def vsa_reference(body: dict) -> dict:
     import tempfile
 
     if not (WINDOWS or WIN32):
-        raise HTTPException(501, "Experimental Ref2VA VSA is a native Windows recipe.")
+        raise HTTPException(501, "Ref2VA VSA is a native Windows recipe.")
     if set(body) - {"path", "resize"} or not isinstance(body.get("path"), str) or type(body.get("resize", False)) is not bool:
         raise HTTPException(400, "choose a Studio picture and an optional boolean resize action")
     source = inside(body["path"])

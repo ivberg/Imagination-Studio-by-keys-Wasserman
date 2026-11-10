@@ -369,7 +369,7 @@ def run() -> int:
     if strict_vsa:
         from windows_video_vsa import COMFY_FLAGS
         if flags != list(COMFY_FLAGS):
-            raise RuntimeError("Experimental VSA requires CK attention and its fixed dynamic-VRAM headroom.")
+            raise RuntimeError("VSA requires CK attention and its fixed dynamic-VRAM headroom.")
     job = OwnedJob()
     try:
         server = job.spawn([sys.executable, "-X", "utf8", "main.py", "--listen", "127.0.0.1", "--port", PORT, *flags],
@@ -379,7 +379,7 @@ def run() -> int:
             guard = Guard(job, floor)
         except (OSError, RuntimeError) as error:
             if strict_vsa:
-                raise RuntimeError(f"Experimental VSA could not start its WDDM memory guard: {error}") from error
+                raise RuntimeError(f"VSA could not start its WDDM memory guard: {error}") from error
             guard = None
             say(f"memory guard: the sampler could not start ({error}); holding a floor of free memory with a plain loop")
         plain = int(floor) if floor.isdigit() and int(floor) > 0 else 2048
@@ -412,7 +412,7 @@ def run() -> int:
                             f"{s.host_total_mb} MB, commit {s.host_commit_used_mb} of {s.host_commit_limit_mb} MB")
                 elif not waiting:
                     if strict_vsa:
-                        raise RuntimeError("Experimental VSA lost fresh WDDM/Windows memory readings: " + (guard.error or "no reading"))
+                        raise RuntimeError("VSA lost fresh WDDM/Windows memory readings: " + (guard.error or "no reading"))
                     say("memory guard: the sampler stopped answering (" + (guard.error or "no reading") +
                         f"); holding {plain} MB of free memory with a plain loop")
                     guard = None

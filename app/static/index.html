@@ -743,7 +743,7 @@ function vsaCheckPanel() {
   const longest = summary && summary.longest_passed;
   const busy = jobs.some(j => ["queued", "running"].includes(j.status) && (j.kind === "video-vsa" || j.kind === "qualification" && j.params.feature === "video-vsa"));
   return el("details", { class: "panel fold", "data-feature": "video-vsa" },
-    el("summary", {}, "Feature check: experimental Ref2VA VSA"),
+    el("summary", {}, "Feature check: Ref2VA VSA"),
     el("div", { class: "stack" },
     el("div", { class: found.available ? "note" : "tip" }, found.available ?
       "The basic check passed. Every valid clip length is selectable; unmeasured lengths are not blocked by qualification. Ordinary H3 is unchanged." : S.windows_vsa.why),
@@ -780,7 +780,7 @@ function vsaControls() {
   const sequence = VSA.mode === "sequence", seconds = Number(VSA.sequenceSeconds);
   const invalidDuration = sequence && (!Number.isInteger(seconds) || seconds < 1 || seconds > 60);
   return el("div", { class: "stack", "data-backend": "video-vsa" },
-    el("h2", {}, "MiniMax H3 Ref2VA VSA - experimental"),
+    el("h2", {}, "MiniMax H3 Ref2VA VSA"),
     choice(VSA, "mode", { single: ["Single clip", "one model-length clip"],
       sequence: ["Sequence up to 60 seconds", "short shots with potentially visible joins"] }, vsaModeChanged),
     field(VSA.mode === "sequence" ? "Per-shot length" : "Single-clip length", select(VSA, "frames",
@@ -880,7 +880,7 @@ function viewVsa() {
     invalidDuration ? el("div", { class: "tip" }, "Choose a whole number of seconds from 1 to 60 in step 1.") : null,
     negNote(),
     el("button", { class: "hot fit", disabled: !found.available || !vsaReferenceReady() || !C.prompt.trim() || invalidDuration, onclick: async () => {
-      try { const job = await api("/api/jobs", { kind: "video-vsa", title: sequence ? "Experimental VSA sequence" : "Experimental Ref2VA VSA",
+      try { const job = await api("/api/jobs", { kind: "video-vsa", title: sequence ? "VSA sequence" : "Ref2VA VSA",
         params: { image: VSA.image, prompt: C.prompt, seed: Number(C.seed), frames: Number(VSA.frames),
           ...(sequence ? { sequence_seconds: seconds } : {}) } });
         VSA.job = job.id; await poll(); render();
@@ -898,7 +898,7 @@ function viewCreate() {
   const vsa = isVsa(), referenced = vsa || isRef();
   if (C.goes !== "image" && C.goes !== "edit" && S && S.windows_vsa) {
     const picker = choice(C, "videoBackend", { standard: ["Supported H3", "existing requirements and recipes"],
-      vsa: ["Experimental Ref2VA VSA", "selectable lengths and live memory guards"] }, render);
+      vsa: ["Ref2VA VSA", "selectable lengths and live memory guards"] }, render);
     body.append(picker);
     body.append(el("div", { class: "note" }, "Scene, action, camera, words, sound, seed and the reviewed prompt are shared. Each backend keeps its own picture and recipe settings. After switching, review the prompt; rebuild it to change between frame and reference wording."));
   }
@@ -1081,22 +1081,42 @@ function viewCreate() {
 async function ensureProject() { if (project) return project; const list = await api("/api/projects"); project = list.length ? await api("/api/projects/" + list[0].id) : await api("/api/projects", { name: "Project 1" }); return project; }
 const saveProject = () => api("/api/projects/" + project.id, project, "PUT").catch(e => toast(e.message));
 const segJob = seg => seg.job && jobs.find(j => j.id === seg.job);
+const SEG_QUEUING = new WeakSet();
+const segBusy = seg => SEG_QUEUING.has(seg) || ["queued", "running"].includes(segJob(seg)?.status);
+const segFinished = seg => !!seg.output && !segBusy(seg) && (!segJob(seg) || segJob(seg).status === "done");
+const segNeedsRender = seg => !segBusy(seg) && (!seg.output || ["failed", "cancelled"].includes(segJob(seg)?.status));
+async function replaceTimeline(paths) {
+  const target = await ensureProject(), timeline = [];
+  if (!paths.length) throw new Error("No finished clips to send to the editor.");
+  for (const path of paths) {
+    const duration = (await api("/api/probe?path=" + encodeURIComponent(path))).duration;
+    if (!Number.isFinite(duration) || duration <= 0) throw new Error("The clip has no readable duration: " + path);
+    timeline.push({ path, in: 0, out: 0, duration });
+  }
+  await api("/api/projects/" + target.id, { ...target, timeline }, "PUT");
+  target.timeline = timeline;
+  if (project === target) { tab = "Editor"; history.replaceState(null, "", "#Editor"); render(); }
+}
 async function composeSeg(seg, index) { const vsa = seg.start === "vsa", first = seg.start !== "text" && !vsa; const r = await api("/api/compose", { fields: { scene: seg.scene, action: seg.action, camera: seg.camera, soundscape: seg.soundscape, music: "N/A",
   dialogue: seg.line ? [{ voice: seg.voice, text: seg.line, language: "English" }] : [] }, first_frame: first, ...(vsa ? {referenced:true,references:1,frames:framesOf(seg)} : {}) }); seg.prompt = r.prompt; }
-async function generateSeg(index) { const seg = project.segments[index]; if (!seg.prompt) await composeSeg(seg, index);
+async function generateSeg(index) { const seg = project.segments[index];
+  if (segBusy(seg)) throw new Error("This segment is already queued or rendering.");
+  SEG_QUEUING.add(seg);
+  try { if (!seg.prompt) await composeSeg(seg, index);
   if (seg.start === "vsa") {
-    if (lorasOf(project).length) throw new Error("Experimental VSA does not support extra LoRAs; clear the project's LoRAs first.");
+    if (lorasOf(project).length) throw new Error("VSA does not support extra LoRAs; clear the project's LoRAs first.");
     const size = S.presets[project.preset]?.size;
-    if (!size || size[0] !== 864 || size[1] !== 480) throw new Error("Experimental VSA requires the 864x480 output preset.");
+    if (!size || size[0] !== 864 || size[1] !== 480) throw new Error("VSA requires the 864x480 output preset.");
     const j = await api("/api/jobs", {kind:"video-vsa",title:"Segment " + (index + 1) + ": " + (seg.title || ""),
       params:{image:seg.vsaImage || "",prompt:seg.prompt,frames:framesOf(seg),seed:Number(seg.seed ?? 1)}});
-    seg.job=j.id;seg.output="renders/" + j.id + "-vsa/video.mp4";return;
+    jobs.unshift(j);seg.job=j.id;seg.output="renders/" + j.id + "-vsa/video.mp4";return;
   }
   const params = { prompt: seg.prompt, preset: project.preset, quality: project.quality, ...lengthOf(seg), seed: Number(seg.seed || 1), ...(lorasOf(project).length ? { loras: lorasOf(project) } : {}), output: "projects/" + project.id + "/seg" + (index + 1) + "_" + Date.now() + ".mp4" };
   if (seg.start === "image" && seg.image) params.image = seg.image;
   if (seg.start === "previous") { const prev = project.segments[index - 1]; if (!prev) throw new Error("the first segment has nothing to continue from"); const pj = segJob(prev);
     params.first_frame_from = prev.output || (pj && pj.params.output); if (!params.first_frame_from) throw new Error("generate segment " + index + " first, or queue them together"); }
-  const j = await api("/api/jobs", { kind: "video", title: "Segment " + (index + 1) + ": " + (seg.title || ""), params }); seg.job = j.id; seg.output = params.output; }
+  const j = await api("/api/jobs", { kind: "video", title: "Segment " + (index + 1) + ": " + (seg.title || ""), params }); jobs.unshift(j); seg.job = j.id; seg.output = params.output;
+  } finally { SEG_QUEUING.delete(seg); } }
 // two ways to plan a film: this board of segments, or the port of Sam Wasserman's Slate (slate.js)
 const productionSwitch = () => el("div", { class: "choice", role: "radiogroup", style: "margin-bottom:16px" }, [["board", "Production board", "segments one after another: the simple way"], ["slate", "Wasserman Slate", "bible, casting, coverage and a First AD, straight to the render queue"]].map(([k, title, sub]) =>
   el("button", { type: "button", role: "radio", "aria-checked": String(SL.mode === k), class: SL.mode === k ? "on" : "", onclick: () => { SL.mode = k; try { localStorage.setItem("production-mode", k); } catch {} render(); } }, el("b", {}, title), el("span", {}, sub))));
@@ -1110,7 +1130,8 @@ function viewProduction() {
   if (SL.mode === "slate") return viewSlate(productionSwitch());
   const box = el("section", { class: "card" }, productionSwitch(), el("h2", {}, "Production"));
   ensureProject().then(async () => {
-    const list = await api("/api/projects"); const total = project.segments.reduce((a, s) => a + Number(s.seconds || 0), 0);
+    await poll();
+    const list = await api("/api/projects"); const total = project.segments.reduce((a, s) => a + framesOf(s), 0) / 24;
     const pick = el("select", { onchange: async () => { project = await api("/api/projects/" + pick.value); render(); } }, list.map(p => el("option", { value: p.id, selected: p.id === project.id }, p.name + " · " + p.segments + " segments")));
     put(box, el("div", { class: "row" }, field("Project", pick), field("Name", bind(project, "name", el("input"), saveProject)),
         el("button", { class: "fit", onclick: async () => { project = await api("/api/projects", { name: "Project " + (list.length + 1) }); render(); } }, "New project")),
@@ -1119,27 +1140,27 @@ function viewProduction() {
         S.sharp ? sharpButton(project.preset === "sharp" && project.quality === S.sharp.quality, () => { project.preset = "sharp"; project.quality = S.sharp.quality;
           for (const g of project.segments) { g.seed = S.sharp.seed; if (!S.sharp.seconds.includes(Number(g.seconds))) g.seconds = S.sharp.seconds[0]; } saveProject(); render(); }) : null),
       loraHub(project, saveProject),
-      el("h3", {}, "Segment overview · " + total + " s total"),
-      el("div", { class: "strip" }, project.segments.map((s, i) => el("div", { style: "flex:" + (s.seconds || 5) }, (i + 1) + " · " + (s.title || "") + " · " + Math.round(s.seconds * 100) / 100 + " s"))),
+      el("h3", {}, "Segment overview · " + Math.round(total * 1000) / 1000 + " s total"),
+      el("div", { class: "strip" }, project.segments.map((s, i) => el("div", { style: "flex:" + framesOf(s) }, (i + 1) + " · " + (s.title || "") + " · " + exact(framesOf(s))))),
       // segments that do not open on the one before render side by side, one per Spark (sparks.js)
       sparksPick({ kind: "video", clips: Math.max(1, project.segments.filter(g => g.start !== "previous").length), params: { preset: project.preset, quality: project.quality, seconds: Number((project.segments[0] || {}).seconds || 5), loras: lorasOf(project) } }),
       project.segments.some(g => g.start === "previous") && SPK.n > 1 && SPK.data && SPK.data.supported ? el("div", { class: "note" }, "A segment that opens on the last frame of the one before waits for it; the others render side by side.") : null,
       el("div", { class: "row" }, el("button", { class: "fit", onclick: () => { project.segments.push({ title: "", scene: project.segments.at(-1)?.scene || "", action: "", camera: "", voice: "", line: "", soundscape: "", seconds: 5, seed: 1,
           start: project.segments.length ? "previous" : "text", image: null, prompt: "" }); saveProject(); render(); } }, "+ Add a segment"),
-        el("button", { class: "hot fit", disabled: !project.segments.length, onclick: async () => { try { for (let i = 0; i < project.segments.length; i++) if (!project.segments[i].output || segJob(project.segments[i])?.status === "failed") await generateSeg(i);
+        el("button", { class: "hot fit", disabled: !project.segments.some(segNeedsRender), onclick: async () => { try { for (let i = 0; i < project.segments.length; i++) if (segNeedsRender(project.segments[i])) await generateSeg(i);
           await saveProject(); await poll(); render(); } catch (e) { toast(e.message); } } }, "Generate every segment not yet rendered"),
-        el("button", { class: "fit", disabled: !project.segments.some(s => s.output), onclick: () => { project.timeline = project.segments.filter(s => s.output).map(s => ({ path: s.output, in: 0, out: 0, duration: Number(s.seconds) }));
-          saveProject(); tab = "Editor"; render(); } }, "Send rendered segments to the editor"),
+        el("button", { class: "fit", disabled: !project.segments.some(segFinished), onclick: async () => {
+          try { await replaceTimeline(project.segments.filter(segFinished).map(s => s.output)); } catch (e) { toast(e.message); } } }, "Send rendered segments to the editor"),
         el("button", { class: "fit", disabled: !project.segments.length, title: "Empty the scene, action, voice, line and soundscape of every segment. Titles, lengths and rendered clips stay.", onclick: clearSegments }, "Clear every segment's text"),
         CLEARED && CLEARED.key === "segments" ? el("button", { class: "fit", onclick: undoClear }, "Undo clear") : null, el("span")));
     project.segments.forEach((seg, i) => { const job = segJob(seg); const change = () => { seg.prompt = ""; saveProject(); };
       put(box, el("div", { class: "seg", "data-clear": "segment-" + i }, el("div", { class: "seghead" }, el("b", {}, "Segment " + (i + 1)), job ? el("span", { class: "pill " + job.status }, job.status) : el("span", { class: "pill queued" }, seg.output ? "rendered" : "draft"),
-          el("span", { style: "flex:1" }), clearButton("segment-" + i), el("button", { class: "small", onclick: async () => { try { await generateSeg(i); await saveProject(); await poll(); render(); } catch (e) { toast(e.message); } } }, seg.output ? "Render again" : "Render"),
+          el("span", { style: "flex:1" }), clearButton("segment-" + i), el("button", { class: "small", disabled: segBusy(seg), onclick: async () => { try { await generateSeg(i); await saveProject(); await poll(); render(); } catch (e) { toast(e.message); } } }, seg.output ? "Render again" : "Render"),
           el("button", { class: "small", disabled: i === 0, onclick: () => { project.segments.splice(i - 1, 0, project.segments.splice(i, 1)[0]); saveProject(); render(); } }, "↑"),
           el("button", { class: "small", onclick: () => { project.segments.splice(i, 1); saveProject(); render(); } }, "Remove")),
         el("div", { class: "row" }, keep(field("Title", bind(seg, "title", el("input"), saveProject))),
           el("div", { class: "fit", style: "width:250px" }, el("label", {}, "Length"), lengthPicker({ get frames() { return seg.frames; }, set frames(v) { seg.frames = v; }, get seconds() { return seg.seconds; }, set seconds(v) { seg.seconds = v; }, preset: project.preset }, () => { saveProject(); render(); })),
-          field("Opens on", select(seg, "start", { text: "nothing (text to video)", previous: "the last frame of the segment before", image: "an image from the library", ...(S.windows_vsa ? {vsa:"an experimental VSA reference (not a first frame)"} : {}) }, () => { change(); render(); })),
+          field("Opens on", select(seg, "start", { text: "nothing (text to video)", previous: "the last frame of the segment before", image: "an image from the library", ...(S.windows_vsa ? {vsa:"a VSA reference (not a first frame)"} : {}) }, () => { change(); render(); })),
           el("div", { class: "fit", style: "width:90px" }, el("label", {}, "Seed"), bind(seg, "seed", el("input", { type: "number" }), saveProject))),
         seg.start === "image" ? keep(field("Image path (copy from the Library tab)", bind(seg, "image", el("input", { placeholder: "scouts/…/scout_s3.png" }), saveProject))) : null,
         seg.start === "vsa" ? el("div", {}, keep(field("VSA reference path (prepare a copy in Create first)", bind(seg, "vsaImage", el("input", {placeholder:"uploads/reference.png"}), change))),
@@ -1148,7 +1169,7 @@ function viewProduction() {
         el("div", { class: "row" }, field("Voice", bind(seg, "voice", el("input", { placeholder: "a warm female voice" }), change)), field("Spoken line (optional)", bind(seg, "line", el("input"), change))),
         field("Soundscape", bind(seg, "soundscape", el("input"), change)),
         job && job.status === "running" ? jobCard(job) : null,
-        seg.output && (!job || job.status === "done") ? el("video", { src: file(seg.output), controls: true, preload: "metadata", style: "width:100%;max-width:520px;border-radius:8px;margin-top:8px" }) : null)); });
+        segFinished(seg) ? el("video", { src: file(seg.output), controls: true, preload: "metadata", style: "width:100%;max-width:520px;border-radius:8px;margin-top:8px" }) : null)); });
   }).catch(e => put(box, el("div", { class: "note" }, e.message)));
   return box;
 }
@@ -1404,7 +1425,7 @@ function lessons() {
       { t: "Switch to image", d: ["Set “The prompt goes to” to “Image only”. The form shrinks to one box, the picture model, a size, how many and a seed."], go: { tab: "Create", step: 0, spot: "The prompt goes to", set: { goes: "image" } } },
       { t: "Pick the picture model", d: ["Only installed models are offered. Qwen 2.1 Turbo is on every install: 8 steps, the quickest. Qwen 2.1 Full is its 40-step base model, where those weights are installed. FLUX3-K Fast (16 steps) and FLUX3-K Full (50 steps) are Black Forest Labs' FLUX 3 Image Klein, installed with --flux3. MOSS-Image (OpenMOSS, 25 steps) is on " + (card ? "this GPU" : "a DGX Spark") + " installed with --moss: the best at lettering on posters, titles and signs.", "FLUX3-K first writes a full scene description from your prompt (5 to 20 s, once for all the images), so a short prompt is enough. The models have licences of their own (Qwen Research License, FLUX Kommunity License; MOSS-Image is Apache 2.0): read them before commercial use."],
         eg: "One picture at 1344 × 768, model loaded, on a Mac Studio M5 Ultra: Qwen 2.1 Turbo 4.7 s · FLUX3-K Fast 9.8 s · Qwen 2.1 Full 43 s · FLUX3-K Full 60 s", tip: "From our 128-picture test: Qwen 2.1 Turbo for drafts, FLUX3-K Fast as the everyday choice, Qwen 2.1 Full for faces, posters and character sheets, FLUX3-K Full for final frames of busy scenes and hands; on a DGX Spark, MOSS-Image for anything with words in the frame. The same choice is offered for scouts and a last frame.", go: { tab: "Create", step: 0, spot: "Picture model", set: { goes: "image" } } },
-      { t: "Make and use them", d: ["“Make image” queues the batch; seeds count up from the one you gave. Each result has “Download” and “animate this”, which takes the image to Create using your selected video backend: a first frame for supported H3, or one reference picture for experimental VSA. An oversized VSA reference needs an explicit resize copy."], go: { tab: "Create", step: 0, spot: "Make image", set: { goes: "image" } } } ] },
+      { t: "Make and use them", d: ["“Make image” queues the batch; seeds count up from the one you gave. Each result has “Download” and “animate this”, which takes the image to Create using your selected video backend: a first frame for supported H3, or one reference picture for VSA. An oversized VSA reference needs an explicit resize copy."], go: { tab: "Create", step: 0, spot: "Make image", set: { goes: "image" } } } ] },
     { id: "edit", track: "Create", title: "Edit a picture", sub: "change a picture in words, or move the camera round it", steps: [
       { t: "Switch to Edit a picture", d: ["Set “The prompt goes to” to “Edit a picture”. A picture model re-draws a picture you give it: Qwen-Image-2.1, or FLUX3-K Fast or Full where they are installed. “Picture model” at the top chooses when there is more than one.", "Image LoRAs, the camera ring and the 40-step choice are Qwen's; FLUX3-K edits from words and pictures only."], go: { tab: "Create", step: 0, spot: "The prompt goes to", set: { goes: "edit" } } },
       { t: "Give the picture", d: ["Upload one, pick one from the Library, or take a frame of a Library clip: its first frame, its last frame or the frame at a time you type. In the Library, “edit” on a picture opens this step on it."], go: { tab: "Create", step: 0, spot: "1 · The picture", set: { goes: "edit" } } },

@@ -919,15 +919,15 @@ def compile_shot(project: dict, shot_id: str, chain: str | None = None) -> dict:
     vsa = start == "vsa"
     if vsa:
         if extra.get("reference_video") or dialogue == "drama3" or lora_list(extra.get("loras")) or lora_list(film.get("loras")) or any(sheet.get("lora") for sheet in [*cast, place or {}]):
-            raise HTTPException(400, "Experimental VSA accepts one picture, spoken words and sound; video/audio references and extra LoRAs are not supported.")
+            raise HTTPException(400, "VSA accepts one picture, spoken words and sound; video/audio references and extra LoRAs are not supported.")
         if ratio != "16:9" or tier != "480p":
-            raise HTTPException(400, "Experimental VSA requires the film's 480p, 16:9 canvas (864x480).")
+            raise HTTPException(400, "VSA requires the film's 480p, 16:9 canvas (864x480).")
         if slot and slot["spare"] < 0:
             raise HTTPException(400, "Split this music slot into model-valid clips before rendering with VSA.")
         image = extra.get("vsa_image") or ""
         fields["subjects"] = []
         prompt = compose_references(fields, 1)
-        warnings.append("Experimental VSA: one reference picture, not an exact first frame; 864x480, four passes.")
+        warnings.append("VSA: one reference picture, not an exact first frame; 864x480, four passes.")
     else:
         prompt = compose_references(fields, len(subjects)) if references else compose(fields, bool(image or previous), frames=frames)
     for one in negation.check_fields(fields)["negations"]:  # said, never rewritten (negation.py)
@@ -969,7 +969,7 @@ def compile_shot(project: dict, shot_id: str, chain: str | None = None) -> dict:
         memory = {"fits": False, "reason": ""}
         try:
             if not windows_video_vsa.windows_cuda.native_os():
-                raise ValueError("Experimental VSA is a native Windows backend.")
+                raise ValueError("VSA is a native Windows backend.")
             windows_video_vsa.require({**plan, "prompt": prompt})
             memory = windows_video_vsa.memory_fit(frames=frames)
         except (OSError, ValueError, RuntimeError) as error:

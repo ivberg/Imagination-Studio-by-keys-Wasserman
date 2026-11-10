@@ -307,8 +307,7 @@ async function slHave() { const paths = SL.p.scenes.flatMap(sc => sc.shots.flatM
   try { const got = await api("/api/slate/exists", { paths }); if (JSON.stringify(got) !== JSON.stringify(SL.have)) { SL.have = got; render(); } } catch {} }
 async function slToEditor() { await ensureProject(); const clips = SL.p.scenes.flatMap(sc => sc.shots.map(slBest).filter(Boolean)); if (!clips.length) return toast("No finished takes yet");
   if (project.timeline.length && !confirm("Replace the " + project.timeline.length + " clips on the timeline of " + project.name + " with these " + clips.length + " takes?")) return;
-  project.timeline = []; for (const path of clips) { let duration = 5; try { duration = (await api("/api/probe?path=" + encodeURIComponent(path))).duration || 5; } catch {} project.timeline.push({ path, in: 0, out: 0, duration }); }
-  await saveProject(); tab = "Editor"; history.replaceState(null, "", "#Editor"); render(); }
+  try { await replaceTimeline(clips); } catch (e) { toast(e.message); } }
 const slMarkdown = scene => { const out = [`# ${SL.p.name} — ${scene.name}`, ""]; if (scene.synopsis) out.push(scene.synopsis, "");
   for (const sh of scene.shots) { const s = sh.spec; out.push("## " + sh.name); if (sh.intent) out.push("*" + sh.intent + "*");
     out.push("- Spec: " + [s.durationSec && s.durationSec + "s", s.fps && s.fps + "fps", s.aspectRatio, s.size, s.angle, s.lens, s.movement].filter(Boolean).join(" · "), "- Target: minimax-h3", "", "```", sh.prompt, "```", "");
@@ -443,7 +442,7 @@ function slRoll(scene, shot) { const tf = slTf(shot), p = SL.p, plan = SL.plan[s
   const h3 = el("textarea", { style: "min-height:190px;font:13.5px/1.5 var(--mono)" }); h3.value = tf.h3 || (plan && plan.prompt) || ""; h3.addEventListener("input", () => { tf.h3 = h3.value; tf.h3Auto = false; slSave(); });
   const size = plan && plan.plan && (plan.plan.width ? plan.plan.width + " × " + plan.plan.height : (S.presets[plan.plan.preset] || { size: [] }).size.join(" × "));
   return el("div", { class: "group" }, el("label", {}, "Roll camera · this shot opens on"),
-    choice(tf, "start", { text: ["Text only", "the model invents the frame"], previous: ["The shot before", "its last frame, no cut"], image: ["An image", "your own first frame"], cast: ["Cast stills", S.ref2va ? "reference pictures keep the faces" : "needs the Ref2VA model"], ...(S.windows_vsa ? { vsa: ["Experimental VSA reference", "one picture, not an exact first frame"] } : {}) }, redo, true),
+    choice(tf, "start", { text: ["Text only", "the model invents the frame"], previous: ["The shot before", "its last frame, no cut"], image: ["An image", "your own first frame"], cast: ["Cast stills", S.ref2va ? "reference pictures keep the faces" : "needs the Ref2VA model"], ...(S.windows_vsa ? { vsa: ["VSA reference", "one picture, not an exact first frame"] } : {}) }, redo, true),
     tf.start === "image" ? el("div", { class: "row" }, field("Upload the first frame", up), field("or a path from the Library", slIn(tf, "image", { placeholder: "scouts/…/scout_s3.png" }, soft))) : null,
     tf.start === "vsa" ? el("div", {}, field("VSA reference picture in the Library", slIn(tf, "vsa_image", { placeholder: "uploads/reference.png" }, soft)),
       el("div", { class: "note" }, "Use Create → Reference picture to prepare an explicit copy up to 512x288. Set the film to 480p and 16:9. The film's quality preset is replaced by four VSA passes. Extra LoRAs, Drama 3 and video references are refused. Review or recompile an edited prompt after changing opening mode.")) : null,

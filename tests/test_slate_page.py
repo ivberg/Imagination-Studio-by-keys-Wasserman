@@ -1,6 +1,7 @@
 """Slate's page code (app/static/slate.js), run in node with the page's helpers stood in for:
 python3 tests/test_slate_page.py. Skipped where node is not installed; no browser, no GPU, no network."""
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -46,7 +47,8 @@ def run(code: str) -> dict:
         (Path(scratch) / "harness.js").write_text(HARNESS)
         (Path(scratch) / "test.js").write_text(code)
         done = subprocess.run(["node", str(Path(scratch) / "harness.js"), str(ROOT / "app/static/slate.js"), str(Path(scratch) / "test.js")],
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True, timeout=60,
+                              creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     assert done.returncode == 0, done.stderr[-2000:]
     return json.loads(done.stdout.strip().splitlines()[-1])
 
@@ -74,6 +76,18 @@ def test_vsa_render_refusal_does_not_queue_a_take():
       out.queued=calls.some(c=>c[0]==="/api/jobs"); out.takes=shot.takes.length;
     """)
     assert got == {"error": "Resize first", "queued": False, "takes": 0}
+
+
+def test_slate_editor_handoff_uses_shared_checked_delivery_and_surfaces_failure():
+    got = run("""
+      SL.p=film(); SL.p.scenes=[{shots:[{takes:[{mediaPath:"renders/take.mp4",rating:"circled"}]}]}];
+      SL.have={"renders/take.mp4":true};
+      globalThis.project={id:"editor",timeline:[]};
+      globalThis.ensureProject=async()=>project;
+      globalThis.replaceTimeline=async(paths)=>{out.paths=paths;throw new Error("Unreadable clip");};
+      await slToEditor();out.notices=toasts;
+    """)
+    assert got == {"paths": ["renders/take.mp4"], "notices": ["Unreadable clip"]}
 
 
 def test_the_first_ad_changes_a_sheet_instead_of_adding_a_second_one():

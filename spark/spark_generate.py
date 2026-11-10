@@ -811,7 +811,7 @@ def reference(args) -> None:
                           "latent_image": ["6", 1]}}
     save_sound(w, ["14", 0], w["16"]["inputs"]["filename_prefix"] + "_sound")
     cropped = crop_frames(w, args.crop, args.width, args.height) if args.crop else True
-    kind = "Ref2VA VSA (experimental)" if vsa else "Ref2VA with the Turbo adapter" if mode == "turbo" else "Ref2VA"
+    kind = "Ref2VA VSA" if vsa else "Ref2VA with the Turbo adapter" if mode == "turbo" else "Ref2VA"
     count = (f"{len(pictures)} reference picture(s)" + (f", {len(videos)} video(s)" if videos else "")
              + (f", {len(audios)} audio clip(s)" if audios else "") + (", the videos' own sound" if videos and args.ref_video_sound else ""))
     print(f"[tensorfold] engine: cuda (ComfyUI, MiniMax H3 {kind}, {name.split('pruned_')[1].split('.')[0]}), "
@@ -1408,7 +1408,7 @@ def main() -> None:
                         "on a Spark")
     v.add_argument("--ref-mode", choices=("turbo", "full", "vsa"), default="full",
                    help="full: 20 steps; turbo: the bf16 model with LightX2V's 4-pass adapter; "
-                        "vsa: supervised experimental native Windows recipe only")
+                        "vsa: supervised native Windows recipe only")
     v.add_argument("--ref-size", choices=("match", "max"), default="match",
                    help="match: references scaled down to the clip's pixel area (what the adapter was trained with); "
                         "max: up to 2048 pixels on the short edge, several times slower")

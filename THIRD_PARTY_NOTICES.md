@@ -6,7 +6,7 @@ packages and models are downloaded by `scripts/setup-motion.sh` (`oneshot-setup.
 `$PREFIX/motion-venv` and `$PREFIX/motion-models`. The notices for the rest of the pack are in [NOTICE](NOTICE) and
 [CREDITS.md](CREDITS.md).
 
-## Experimental native Windows Ref2VA VSA
+## Native Windows Ref2VA VSA
 
 **Kablex**'s **ComfyUI-Ref2VA-VSA**, commit `323a0a5f7c636cc70f95464145732f81f04a72e9`, is installed separately
 by `scripts/setup-windows-vsa.ps1`; none of its source is copied into this repository. Its Apache-2.0 LICENSE is

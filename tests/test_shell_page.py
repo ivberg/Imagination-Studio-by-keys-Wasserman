@@ -61,7 +61,8 @@ def run(code: str) -> dict:
         (Path(scratch) / "harness.js").write_text(HARNESS)
         (Path(scratch) / "test.js").write_text(code)
         done = subprocess.run(["node", str(Path(scratch) / "harness.js"), str(Path(scratch) / "test.js"), *[str(ROOT / "app/static" / f) for f in FILES]],
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True, timeout=60,
+                              creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     assert done.returncode == 0, done.stderr[-2000:]
     return json.loads(done.stdout.strip().splitlines()[-1])
 
@@ -610,6 +611,32 @@ def test_library_date_group_render_keeps_scroll_height_and_players_with_400_clip
     """)
     assert out["root"] and out["players"] and out["height"] == "6000px"
     assert out["scroll"] == out["scrollAfter"] == [0, 2500]
+
+
+@pytest.mark.parametrize("module_name", ["test_shell_page", "test_slate_page"])
+def test_page_harness_launch_is_hidden_bounded_and_captures_errors(monkeypatch, module_name):
+    import importlib
+    from types import SimpleNamespace
+
+    module = importlib.import_module(module_name)
+    monkeypatch.setattr(module, "need_node", lambda: None)
+    launches = []
+
+    def launch(command, **kwargs):
+        launches.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout='{"ok":true}\n', stderr="")
+
+    monkeypatch.setattr(subprocess, "run", launch)
+    assert module.run("out.ok=true;") == {"ok": True}
+    assert len(launches) == 1
+    command, options = launches[0]
+    assert command[0] == "node"
+    assert options == {"capture_output": True, "text": True, "timeout": 60,
+                       "creationflags": subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0}
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
+        returncode=1, stdout="", stderr="page fixture failed"))
+    with pytest.raises(AssertionError, match="page fixture failed"):
+        module.run("out.ok=true;")
 
 
 def test_the_memory_guard_fold_refuses_on_a_card_and_still_stops_a_spark():
@@ -1408,10 +1435,13 @@ def test_the_pages_inline_script_and_every_module_parse(tmp_path):
     for n, body in enumerate(scripts):
         path = tmp_path / f"inline-{n}.check.js"  # never in app/static, which the studio serves
         path.write_text(body)
-        done = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True)
+        done = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True, timeout=60,
+                              creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         assert done.returncode == 0, done.stderr
     for src in re.findall(r'<script src="([^"]+\.js)"', html):
-        done = subprocess.run(["node", "--check", str(ROOT / "app/static" / src)], capture_output=True, text=True)
+        done = subprocess.run(["node", "--check", str(ROOT / "app/static" / src)],
+                              capture_output=True, text=True, timeout=60,
+                              creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         assert done.returncode == 0, src + "\n" + done.stderr
 
 

@@ -391,7 +391,7 @@ function takeSheet() {
         VSA.reference && VSA.reference.path === VSA.image && VSA.reference.ready && !VSA.referenceError ? "selected" : "check / resize in step 2") : isRef() ? row("References", refCount() + " of " + (S.reference_total || 12)) : null),
     est,
     video ? el("button", { class: "hot", style: "width:100%", onclick: roll }, C.step === 4 ? "Roll this take" : "Go to Render →") : null,
-    el("div", { class: "note", style: "margin:0;font-size:13.5px" }, vsa ? "Experimental fixed recipe. Length and sequence controls stay on the left; the picture is a reference, not a first-frame anchor." : "The full controls stay on the left. A recipe only sets engine, passes and size."));
+    el("div", { class: "note", style: "margin:0;font-size:13.5px" }, vsa ? "Fixed VSA recipe. Length and sequence controls stay on the left; the picture is a reference, not a first-frame anchor." : "The full controls stay on the left. A recipe only sets engine, passes and size."));
 }
 // what the prompt goes to, as one small control over Create: the Image and Video rooms open it already set
 function intentBar() { const opts = { video: "Video with sound", image: "Image", edit: "Edit a picture" };

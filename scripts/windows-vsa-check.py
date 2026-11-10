@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Studio-owned experimental VSA rendering and qualification; no automatic downloads."""
+"""Studio-owned VSA rendering and qualification; no automatic downloads."""
 import argparse
 import json
 import os

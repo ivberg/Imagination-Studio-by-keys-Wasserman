@@ -330,7 +330,7 @@ def attach(server):
         found = vsa.status()
         receipt = features.saved(vsa.KIND, "")
         cards.append({**CHECKS[vsa.KIND].public(), **found, "backend": "native-vsa",
-                      "open_tab": "Create", "open_label": "Open experimental VSA",
+                      "open_tab": "Create", "open_label": "Open VSA",
                       "memory": {"minimum_installed_ram_mb": None, "minimum_label": "Full-model memory must be measured locally",
                                  "gpu_required": True, "job_commit_cap_mb": None,
                                  "lowest_tested_ram_mb": found.get("hardware", {}).get("physical_total_mb")},

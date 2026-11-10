@@ -6,9 +6,9 @@ graphs and TensorFold's engines) on Windows' own NVIDIA driver. There is no WSL 
 on 2026-11-06. The dated measurements below that compare with WSL are kept as they were taken.
 What differs from a DGX Spark is the laptop's memory split and its power budget.
 
-## Experimental Ref2VA VSA on a smaller memory partition
+## Ref2VA VSA on a smaller memory partition
 
-This is a **separately selected experiment**, not a lower memory limit for supported H3. The normal H3
+This is a **separately selected backend**, not a lower memory limit for supported H3. The normal H3
 `MIN_POOL_MB` policy remains 90,000 MiB. Installed RAM, Windows commit headroom and dedicated GPU memory are
 different budgets; they are never added together to make a render fit.
 
@@ -19,11 +19,11 @@ powershell -ExecutionPolicy Bypass -File scripts\setup-windows-vsa.ps1
 ```
 
 This installs only Kablex's pinned Apache-2.0 custom node, retaining its licence. It does not download weights,
-install packages or build H3. The required filenames and folders are in [the experimental recipe](../app/windows_video_vsa.py):
+install packages or build H3. The required filenames and folders are in [the VSA recipe](../app/windows_video_vsa.py):
 INT8 ConvRot Ref2VA, NVFP4/AWQ Qwen3VL-32B, FP16 video VAE, FP32 audio VAE, the Ref2VA four-step Turbo adapter
 and the FastH3 VSA gate. MiniMax H3's Community License and territory restrictions still apply.
 
-Restart the **real Studio**, then open **Video -> Experimental Ref2VA VSA**, or choose that backend in Create.
+Restart the **real Studio**, then open **Video -> Ref2VA VSA**, or choose that backend in Create.
 Both backends use the same five Create steps: shot, picture/reference, words and sound, prompt review, then render.
 The shared take sheet shows VSA's own fixed recipe, length, seed and reference status, without supported H3's
 recipe shortcuts or estimates; its Roll button uses the same guarded VSA action as the Render step.
@@ -43,19 +43,24 @@ writing; adding `"resize":true` makes the copy with a 30-second tool timeout. Ne
 The Render step stays disabled until the selected picture has been checked and fits the recipe.
 Finished VSA clips/sequences use the normal Editor/download actions, can open their Library processing actions,
 and can be chosen for a soundtrack in Music. Those existing features retain their own prerequisites and guards.
-In Production/Slate, a shot can explicitly choose **Experimental VSA reference** under **Roll camera**.
+In Production/Slate, a shot can explicitly choose **VSA reference** under **Roll camera**.
 Its separate Library path is saved on the shot; prepare an oversized picture in Create first.
 The film must use 480p and 16:9. Duration (including music-bar slots) keeps the model-valid frame count;
 the quality preset becomes the fixed four-pass recipe. Extra LoRAs, Drama 3 voice references and previs clips
 are refused, not dropped. VSA takes stay attached to the film with their backend, seed and actual recipe,
 and use the same take review and Editor delivery. Existing text, first-frame, previous-shot and cast-still
 modes keep supported H3; none are silently converted to VSA.
-The simple Production board likewise offers **an experimental VSA reference** in each segment's **Opens on**.
+The simple Production board likewise offers **a VSA reference** in each segment's **Opens on**.
 It saves a separate picture path, requires the 864x480 output preset and refuses project LoRAs. The normal
 segment queue and Editor handoff retain the resulting clip; text, image and previous-segment modes are unchanged.
-The existing experimental feature-check panel is collapsed by default in Create and Machine; expand it to run a check
+Only finished segments can be sent to the Editor; queued/running segments cannot be submitted twice, and
+cancelled segments are eligible for the board's batch retry. Board and Slate handoffs measure the actual
+saved clip duration, rather than the requested shot length; the board overview shows the model-valid
+frame count and seconds. An unreadable clip or failed save leaves the
+existing timeline unchanged and reports the error.
+The existing VSA feature-check panel is collapsed by default in Create and Machine; expand it to run a check
 or inspect the length history. Qualification behavior is unchanged.
-**Machine -> Feature check: experimental Ref2VA VSA** queues the same explicit check. The API equivalent is:
+**Machine -> Feature check: Ref2VA VSA** queues the same explicit check. The API equivalent is:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:7870/api/feature-checks/check -Method Post `
@@ -90,7 +95,7 @@ recipe limits and all live memory guards apply in either mode.
 
 The native dynamic-VRAM loader and handle-owned process tree remain in use. The independent observer and server
 guard fail closed on missing/stale Windows/WDDM readings. Host and commit floors are retained, with a 2 GiB
-dedicated GPU reserve. The experimental dynamic loader additionally requests 3 GiB of unused VRAM headroom
+dedicated GPU reserve. The VSA dynamic loader additionally requests 3 GiB of unused VRAM headroom
 (`--vram-headroom 3`); this constrains loading rather than weakening the guard. Future admission uses matching
 measured **commit** growth plus a 1 GiB error margin, not a combined RAM/VRAM allowance.
 Historical host and GPU resident growth are saved as **advisory predictions**, including their error margins:
@@ -104,6 +109,40 @@ An unmeasured length has an unknown peak: it is admitted on live floors and inde
 not assigned the shorter clip's memory profile. A memory refusal is a blocker, never a reason to relax the floors.
 The saved observations establish resource safety for this short recipe, **not visual fidelity or a laptop
 throughput claim**. Neither the author's RTX 4090 benchmark nor synthetic kernel results qualify larger clips.
+
+Fresh Production UI renders passed after commit capacity was freed: a 73-frame Board clip (3.042 seconds)
+and a 124-frame Slate dialogue clip (5.167 seconds), both 864x480 with sound. Reload preserved the Board's
+seed zero and the Slate take's VSA backend/recipe; both Editor handoffs saved the probed media duration.
+Observed host/GPU/commit minima were 5749/3497/13180 MiB for the Board clip and 6421/3504/12797 MiB for
+Slate, with no refused observer samples. Both decoded audio tracks had finite samples. Listening review
+found the Slate English dialogue good, but heard indistinct, foreign-language-like speech in the Board
+clip despite its ambient-only soundscape and closed-mouth instruction. That clip failed the no-dialogue
+audio-quality check. These are one workflow/resource check each, not new qualification receipts or
+verification of precise lip-sync.
+
+A seed-only repeat batch also completed through the Studio queue: the same 73-frame ambient-only prompt
+at seeds 1 and 2, and the same 124-frame English-dialogue prompt at seed 2. Within each case the compiled
+prompt was reused byte-for-byte; only the seed changed. All three produced valid 864x480 clips with sound
+and passed the observer guards. Listening review heard unwanted, partly English-like/indistinct speech
+and no ambience in both ambient-only repeats. Including the original seed 0, the ambient-only speech
+constraint failed at all three tested seeds. Both explicit-dialogue clips (seeds 1 and 2) had clear English.
+These small counts describe this one baker scene and recipe, not general success rates; exact wording
+and precise lip-sync were not verified. This establishes repeatable prompt-adherence trouble here,
+not a quality regression against dense H3, which has not had a matched comparison.
+
+A prompt-path audit reconstructed the original quiet prompt through `/api/compose` and matched its recorded
+SHA-256. It contains closed-mouth and ambient-only instructions, without dialogue or a voice request. The
+checked VSA path forwards that text unchanged; the installed MiniMax tokenizer adds picture labels and vision
+blocks, not a chat or speech template. There is no audio reference in this recipe, and audio finishing uses the
+same job's decoded soundtrack, not the Voice service. This is hash matching and source tracing, not a retained
+historical conditioning capture. The action does say "a small greeting": a possible implicit speaking cue,
+not an established cause.
+
+A subsequent fixed-seed A/B completed through the Studio queue at seed 1 and 73 frames. A reused the exact
+original prompt; B changed only `overall_soundscape` to concrete oven-fan, baking-tray and cloth sounds.
+The picture, greeting action, closed-mouth instruction and rendering recipe were unchanged. Both retained
+their guarded measurements and media; listening review is pending. Technical completion alone does not
+establish that the soundscape change prevents unwanted speech.
 
 A local 175-frame single clip (7.292 seconds) completed under these guards; its observed minima were
 3063 MiB host available, 3448 MiB dedicated GPU free and 5392 MiB commit headroom. These are one run,
@@ -152,7 +191,7 @@ The selectable maximum is the model's limit, **not a claim that this laptop can 
 
 ### Automatic clip-length qualification on this machine
 
-Use **Qualify clip lengths automatically** in the experimental VSA panel, or:
+Use **Qualify clip lengths automatically** in the VSA panel, or:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:7870/api/feature-checks/check -Method Post `
@@ -166,7 +205,7 @@ telemetry problem, render error, timeout or cancellation, never intentionally at
 The sweep has a two-hour total budget plus cleanup; each render keeps its existing 30-minute upper bound.
 
 Qualification is tied to this machine's actual hardware partition, recipe, weights and execution contract, not
-just installed RAM. A 128 GB install can use this experimental model without qualifying ordinary H3 or
+just installed RAM. A 128 GB install can use this VSA model without qualifying ordinary H3 or
 obtaining qualification evidence when qualification is disabled. Host, commitment and dedicated GPU
 budgets remain separate. This does **not** qualify separate sound-effects/Foley models or concurrent model residency.
 
@@ -180,7 +219,7 @@ or a model error is **not the machine's absolute memory limit**. If every count 
 single-clip bound still applies. Current progress and partial results persist in the job's qualification report;
 individual successful receipts survive failure or cancellation. No automatic retry follows a stop.
 
-### Experimental sequences up to one minute
+### VSA sequences up to one minute
 
 Select **Sequence up to 60 seconds** in the VSA backend. With qualification enabled, the chooser initially selects
 the longest separately checked per-shot length; all other valid lengths remain selectable. With qualification
@@ -323,6 +362,11 @@ it builds the 42 GB model in Windows' RAM before moving it and crashed reading t
 <a id="native-windows-the-native-cuda-tier"></a>
 
 ## How the native Studio works
+
+Background queue and observer processes use hidden launches. A hidden venv command uses its sibling
+`pythonw.exe` because the `python.exe` redirector can open a console even with `CREATE_NO_WINDOW`.
+Logs remain captured and the process tree stays job-owned. A missing windowless launcher reports that
+the Python environment needs repair rather than silently reverting to a visible console.
 
 On Windows the Studio is the same app as on a DGX Spark (`app/windows_runtime.py`, `app/windows_cuda.py`), with
 TensorFold's Windows engines and a CUDA pool of about 113 GB:

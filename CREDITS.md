@@ -335,9 +335,9 @@ TensorFold 1.1.5's CUDA runtime and the music3 family's decode GEMVs, with this 
 Haocheng Xi, Song Han, Enze Xie and co-authors of the Sol-Engine and Sol-Attn papers). Sol-H3 showed which
 optimizations matter for H3: few-step adapters, fused norm / RoPE / SwiGLU kernels, precomputed AdaLN, int8 QKV,
 and dense attention on a single device. The cached AdaLN tables and the fused QKV kernel here follow that list.
-Their runtime is CUDA. The experimental native Windows Ref2VA VSA route uses Sol-Attention through comfy-kitchen.
+Their runtime is CUDA. The native Windows Ref2VA VSA route uses Sol-Attention through comfy-kitchen.
 
-**Kablex** wrote **ComfyUI-Ref2VA-VSA** (Apache-2.0), the experimental gate transplant and dense-prefix / sparse-video
+**Kablex** wrote **ComfyUI-Ref2VA-VSA** (Apache-2.0), the gate transplant and dense-prefix / sparse-video
 attention patch used by the separately selected Windows recipe. **barelymining** packaged the trained **FastVideo**
 FastH3 gate; **LightX2V** made the four-pass Ref2VA adapter. This is not TensorFold's standard H3 route. The model's
 MiniMax H3 Community License and territory limits still apply; the node's licence does not replace them.

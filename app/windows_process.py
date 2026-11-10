@@ -3,11 +3,26 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+from pathlib import Path
 import subprocess
 import threading
 import time
 
 from windows_memory import process_memory
+
+
+def hidden_venv_command(argv, flags):
+    if not flags & 0x08000000 or not isinstance(argv, (list, tuple)) or not argv:
+        return argv
+    executable = Path(argv[0])
+    if (not executable.is_absolute() or executable.name.lower() != "python.exe"
+            or executable.parent.name.lower() != "scripts"):
+        return argv
+    # The venv console redirector can allocate a console despite CREATE_NO_WINDOW.
+    windowless = executable.with_name("pythonw.exe")
+    if not windowless.is_file():
+        raise FileNotFoundError("Hidden Windows venv launches require the sibling pythonw.exe; repair this Python environment.")
+    return [str(windowless), *argv[1:]]
 
 
 class OwnedJob:
@@ -94,7 +109,7 @@ class OwnedJob:
 
     def spawn(self, argv, **kwargs):
         flags = kwargs.pop("creationflags", 0) | 0x4  # CREATE_SUSPENDED
-        process = subprocess.Popen(argv, creationflags=flags, **kwargs)
+        process = subprocess.Popen(hidden_venv_command(argv, flags), creationflags=flags, **kwargs)
         try:
             self.attach(process)
             resume = ctypes.WinDLL("ntdll").NtResumeProcess

@@ -195,6 +195,7 @@ def test_invalid_backend_headroom_is_refused(free):
 @pytest.mark.skipif(sys.platform != "win32", reason="uses Windows-only APIs or file layouts; run by the windows-arm64 CI job")
 def test_backend_monitor_starts_only_after_server_readiness(monkeypatch, tmp_path):
     ready = {"stats": False, "core": False, "attempts": 0}
+    launches = []
 
     class Monitor:
         def __init__(self, *args):
@@ -222,7 +223,11 @@ def test_backend_monitor_starts_only_after_server_readiness(monkeypatch, tmp_pat
                               send_signal=lambda *args: None, returncode=0)
     monkeypatch.setattr(check.sys, "platform", "win32")
     monkeypatch.setattr(check, "verify_source", lambda *args: None)
-    monkeypatch.setattr(check, "OwnedJob", lambda: SimpleNamespace(spawn=lambda *args, **kwargs: process, close=lambda: None))
+    def spawn(*args, **kwargs):
+        launches.append(kwargs)
+        return process
+
+    monkeypatch.setattr(check, "OwnedJob", lambda: SimpleNamespace(spawn=spawn, close=lambda: None))
     monkeypatch.setattr(check, "MemoryWatchdog", Monitor)
     monkeypatch.setattr(check.subprocess, "Popen", lambda *args, **kwargs: process)
     monkeypatch.setattr(check.subprocess, "CREATE_NEW_PROCESS_GROUP", 512, raising=False)
@@ -244,6 +249,10 @@ def test_backend_monitor_starts_only_after_server_readiness(monkeypatch, tmp_pat
 
     monkeypatch.setattr(check, "read_json", response)
     assert check.run_check(tmp_path, 5, 0, guarded=True)["ok"]
+    assert launches[0]["startupinfo"].dwFlags & subprocess.STARTF_USESHOWWINDOW
+    assert launches[0]["startupinfo"].wShowWindow == subprocess.SW_HIDE
+    assert launches[0]["creationflags"] & subprocess.CREATE_NEW_PROCESS_GROUP
+    assert not launches[0]["creationflags"] & subprocess.CREATE_NO_WINDOW
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="uses Windows-only APIs or file layouts; run by the windows-arm64 CI job")
