@@ -52,6 +52,115 @@ def create_run(code):
     """ + code)
 
 
+def production_run(code):
+    production = PAGE[PAGE.index("/* ---------- Production"):PAGE.index("/* ---------- Editor")]
+    return create_run(production + """
+      globalThis.CLEARED=null; globalThis.SPK={n:1};
+      globalThis.bind=(o,k,n)=>n; globalThis.select=()=>el("select");
+      globalThis.loraHub=()=>null; globalThis.lengthPicker=()=>null;
+      answers["/api/projects"]=[];
+    """ + code)
+
+
+@pytest.mark.parametrize("status,finished,retry,busy", [
+    ("queued", False, False, True), ("running", False, False, True),
+    ("failed", False, True, False), ("cancelled", False, True, False),
+    ("done", True, False, False),
+])
+def test_production_board_only_delivers_finished_segments_and_retries_cancelled(status, finished, retry, busy):
+    out = production_run("""
+      project={id:"test",segments:[{start:"vsa",job:"one",output:"renders/one/video.mp4",seconds:3,frames:73}]};
+      jobs=[{id:"one",status:""" + repr(status) + """}];
+      const root=viewProduction(); await new Promise(resolve=>setImmediate(resolve));
+      out.editorDisabled=button(root,"Send rendered segments").attrs.disabled;
+      out.batchDisabled=button(root,"Generate every segment").attrs.disabled;
+      out.renderDisabled=button(root,"Render again").attrs.disabled;
+      out.exactOverview=text(root).includes("3.042 s total") && text(root).includes("73 frames");
+    """)
+    assert out == {"editorDisabled": not finished, "batchDisabled": not retry, "renderDisabled": busy, "exactOverview": True}
+
+
+def test_production_board_blocks_duplicate_submission_before_and_after_queue_reply():
+    out = production_run("""
+      project={id:"test",preset:"small",segments:[{start:"vsa",vsaImage:"uploads/ref.png",prompt:"Reference."}]};
+      const savedApi=api; let release; const reply=new Promise(resolve=>{release=resolve;});
+      globalThis.api=async(path,body)=>{if(path==="/api/jobs"){calls.push([path,body]);return await reply;}return savedApi(path,body);};
+      const first=generateSeg(0);
+      try {await generateSeg(0);} catch(e) {out.pendingError=e.message;}
+      release({id:"one",status:"queued"}); await first;
+      try {await generateSeg(0);} catch(e) {out.queuedError=e.message;}
+      out.count=calls.filter(c=>c[0]==="/api/jobs").length;
+    """)
+    assert out["pendingError"] and out["queuedError"] and out["count"] == 1
+
+
+def test_production_board_submission_failure_allows_retry():
+    out = production_run("""
+      project={id:"test",preset:"small",segments:[{start:"vsa",vsaImage:"uploads/ref.png",prompt:"Reference."}]};
+      answers["/api/jobs"]=new Error("Admission refused");
+      try {await generateSeg(0);} catch(e) {out.error=e.message;}
+      out.busy=segBusy(project.segments[0]);
+      answers["/api/jobs"]={id:"retry",status:"queued"}; await generateSeg(0);
+      out.job=project.segments[0].job;
+    """)
+    assert out == {"error": "Admission refused", "busy": False, "job": "retry"}
+
+
+@pytest.mark.parametrize("start", ["text", "image", "previous"])
+def test_production_board_keeps_supported_h3_routes(start):
+    out = production_run("""
+      project={id:"test",preset:"small",quality:"standard",segments:[
+        {output:"renders/previous.mp4"},
+        {start:""" + repr(start) + """,image:"uploads/first.png",prompt:"Shot.",seconds:5,seed:7}]};
+      answers["/api/jobs"]={id:"supported",status:"queued"};
+      await generateSeg(1);
+      out.job=calls.find(c=>c[0]==="/api/jobs")[1];
+      out.busy=segBusy(project.segments[1]);
+    """)
+    assert out["job"]["kind"] == "video" and out["busy"]
+    params = out["job"]["params"]
+    assert params["prompt"] == "Shot." and params["preset"] == "small" and params["seed"] == 7
+    assert ("image" in params) == (start == "image")
+    assert ("first_frame_from" in params) == (start == "previous")
+    if start == "previous":
+        assert params["first_frame_from"] == "renders/previous.mp4"
+
+
+def test_production_board_editor_handoff_uses_actual_saved_duration():
+    out = production_run("""
+      project={id:"test",timeline:[],segments:[
+        {job:"done",output:"renders/done/video.mp4",seconds:3,frames:73},
+        {job:"running",output:"renders/running/video.mp4",seconds:5}]};
+      jobs=[{id:"done",status:"done"},{id:"running",status:"running"}];
+      answers["/api/probe?path=renders%2Fdone%2Fvideo.mp4"]={duration:73/24};
+      const root=viewProduction(); await new Promise(resolve=>setImmediate(resolve));
+      await button(root,"Send rendered segments").attrs.onclick();
+      out.timeline=project.timeline;out.tab=tab;
+      out.saved=calls.find(c=>c[0]==="/api/projects/test")[1].timeline;
+    """)
+    expected = [{"path": "renders/done/video.mp4", "in": 0, "out": 0, "duration": 73 / 24}]
+    assert out["timeline"] == out["saved"] == expected
+    assert out["tab"] == "Editor"
+
+
+@pytest.mark.parametrize("failure", ["probe", "duration", "save"])
+def test_editor_handoff_failure_preserves_existing_timeline(failure):
+    out = production_run("""
+      project={id:"test",timeline:[{path:"kept.mp4"}],segments:[]};
+      answers["/api/probe?path=good.mp4"]={duration:7.292};
+      answers["/api/probe?path=bad.mp4"]=""" + (
+        'new Error("Probe refused")' if failure == "probe" else '{duration:0}' if failure == "duration" else '{duration:5}'
+    ) + """;
+      """ + ('answers["/api/projects/test"]=new Error("Save refused");' if failure == "save" else "") + """
+      try {await replaceTimeline(["good.mp4","bad.mp4"]);} catch(e) {out.error=e.message;}
+      out.timeline=project.timeline;out.tab=tab;
+      out.writes=calls.filter(c=>c[0]==="/api/projects/test").length;
+    """)
+    assert out["error"] and out["timeline"] == [{"path": "kept.mp4"}]
+    assert out["tab"] != "Editor"
+    assert out["writes"] == (1 if failure == "save" else 0)
+
+
 def test_production_board_routes_explicit_vsa_segments_without_standard_settings():
     production = PAGE[PAGE.index("/* ---------- Production"):PAGE.index("/* ---------- Editor")]
     out = create_run(production + """
@@ -103,6 +212,15 @@ def test_vsa_uses_all_five_shared_steps_without_supported_recipe_controls():
     assert "Render 158 frames (6.583 s)" in render and "Add to the editor" not in render
 
 
+def test_vsa_labels_are_not_experimental_in_any_create_step():
+    out = create_run("""
+      out.pages=[];
+      for(let step=0;step<5;step++) { C.step=step; out.pages.push(text(viewCreate())); }
+    """)
+    assert len(out["pages"]) == 5
+    assert all("Ref2VA VSA" in page and "experimental" not in page.lower() for page in out["pages"])
+
+
 def test_switching_backends_keeps_shared_authoring_and_separate_recipe_inputs():
     out = create_run("""
       Object.assign(C,{scene:"Scene",action:"Action",camera:"Camera",dialogue:[{text:"Hello"}],
@@ -116,7 +234,7 @@ def test_switching_backends_keeps_shared_authoring_and_separate_recipe_inputs():
       const standard = viewCreate();
       out.standard = text(standard);
       out.settings = [C.start,C.image,C.lastImage,C.steps,C.refs,C.refVideos,C.refAudios,C.loras,C.retake];
-      await button(standard,"Experimental Ref2VA VSA").attrs.onclick();
+      await button(standard,"Ref2VA VSA").attrs.onclick();
       out.shared = kept()===shared;
       out.vsa = [VSA.image,VSA.frames,C.videoBackend];
     """)
@@ -200,7 +318,7 @@ def test_vsa_render_sends_only_its_existing_recipe_parameters(sequence):
         params["sequence_seconds"] = 8
     assert out["enabled"] and out["job"] == "new-job"
     assert out["request"] == {
-        "kind": "video-vsa", "title": "Experimental VSA sequence" if sequence else "Experimental Ref2VA VSA",
+        "kind": "video-vsa", "title": "VSA sequence" if sequence else "Ref2VA VSA",
         "params": params,
     }
 
@@ -250,7 +368,7 @@ def test_image_creation_is_not_changed_by_the_selected_video_backend():
     """)
     assert out["mode"] == "image" and not out["active"]
     assert "The picture" in out["text"] and "Make image" in out["text"]
-    assert "Experimental Ref2VA VSA" not in out["text"]
+    assert "Ref2VA VSA" not in out["text"]
 
 
 def test_scout_handoff_preserves_backend_and_keeps_supported_frame_separate():

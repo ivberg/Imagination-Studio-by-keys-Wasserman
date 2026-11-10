@@ -23,8 +23,8 @@ def test_desktop_route_is_not_hidden_behind_static_mount(client):
     assert response.json()["error"] == "This app was not started by the desktop controller."
 
 
-@pytest.mark.parametrize("feature,hidden", [("qwen", True), ("voice", True), ("music", True), ("hlg", False)])
-def test_native_image_checker_outer_process_does_not_open_a_console(monkeypatch, feature, hidden):
+@pytest.mark.parametrize("feature", ["qwen", "voice", "music", "hlg", "video-vsa"])
+def test_windows_queue_outer_process_does_not_open_a_console(monkeypatch, feature):
     import windows_process
 
     calls = []
@@ -52,7 +52,7 @@ def test_native_image_checker_outer_process_does_not_open_a_console(monkeypatch,
            "status": "running", "log": ""}
     assert server.run(job, ["python", "checker.py"], {})
     launch = next(kwargs for label, kwargs in calls if label == "spawn")
-    assert bool(launch["creationflags"] & 0x08000000) is hidden
+    assert launch["creationflags"] & 0x08000000
     assert launch["stdout"] == subprocess.PIPE and launch["stderr"] == subprocess.STDOUT
     assert ("closed", {}) in calls
     assert server.running["process"] is None
@@ -61,10 +61,13 @@ def test_native_image_checker_outer_process_does_not_open_a_console(monkeypatch,
 def test_vsa_supervisor_cannot_leave_its_queue_ownership(monkeypatch):
     import windows_process
     calls = []
+    launches = []
     process = SimpleNamespace(stdout=[], pid=123, wait=lambda *args: 0)
     class Owned:
         def __init__(self, **kwargs): calls.append(kwargs)
-        def spawn(self, *args, **kwargs): return process
+        def spawn(self, *args, **kwargs):
+            launches.append(kwargs)
+            return process
         def close(self): calls.append("closed")
     monkeypatch.setattr(windows_process, "OwnedJob", Owned)
     monkeypatch.setattr(server, "SPARK", False)
@@ -76,6 +79,7 @@ def test_vsa_supervisor_cannot_leave_its_queue_ownership(monkeypatch):
     job = {"id": "test", "kind": "video-vsa", "params": {}, "status": "running", "log": ""}
     assert server.run(job, ["python", "checker.py"], {})
     assert calls == [{"job_commit_mb": 0, "breakaway": False}, "closed"]
+    assert launches[0]["creationflags"] & 0x08000000
 
 
 @pytest.fixture

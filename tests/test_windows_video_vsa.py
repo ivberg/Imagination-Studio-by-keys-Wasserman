@@ -36,6 +36,16 @@ def test_recipe_rejects_unsupported_or_invalid_settings(params):
         vsa.parameters(params)
 
 
+def test_display_status_is_not_experimental_and_still_requires_prerequisites(monkeypatch):
+    monkeypatch.setattr(vsa, "prerequisites", lambda: "Missing VSA weights")
+    found = vsa.status()
+    assert vsa.TITLE == "MiniMax H3 Ref2VA VSA"
+    assert found["experimental"] is False
+    assert found["state"] == "not_installed"
+    assert not found["installed"] and not found["available"] and not found["qualified"]
+    assert found["why"] == "Missing VSA weights"
+
+
 def test_prompt_is_not_rewritten_and_only_declared_settings_are_returned():
     params = {"image": "uploads/ref.png", "prompt": "Use <Picture 1>. No cuts.", "seed": 42}
     assert vsa.parameters(params) == params

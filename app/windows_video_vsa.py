@@ -1,4 +1,4 @@
-"""Explicit experimental Ref2VA VSA recipe; local render evidence never enables ordinary H3."""
+"""Explicit Ref2VA VSA recipe; local render evidence never enables ordinary H3."""
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -23,7 +23,7 @@ import windows_runtime
 from windows_qualification import gpu_compatibility, hardware_profile, verify_model_updates
 
 KIND = "video-vsa"
-TITLE = "MiniMax H3 Ref2VA VSA (experimental)"
+TITLE = "MiniMax H3 Ref2VA VSA"
 CONTRACT = 1
 WIDTH, HEIGHT, FRAMES = 864, 480, 22
 CALIBRATION_FRAMES = tuple(counts())
@@ -74,21 +74,21 @@ def prerequisites() -> str:
         return "Install native FFmpeg/ffprobe with scripts\\setup-windows-ffmpeg.ps1."
     missing = [path.name for path in model_files().values() if not path.is_file() or not path.stat().st_size]
     if missing:
-        return "Missing experimental VSA weights: " + ", ".join(missing)
+        return "Missing VSA weights: " + ", ".join(missing)
     for name, expected in NODE_BLOBS.items():
         path = node_root() / name
         if not path.is_file():
-            return "Install the pinned experimental node with scripts\\setup-windows-vsa.ps1."
+            return "Install the pinned VSA node with scripts\\setup-windows-vsa.ps1."
         content = path.read_bytes()
         blob = hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
         if blob != expected:
-            return "The experimental VSA node differs from its pinned source; rerun its setup or restore that node."
+            return "The VSA node differs from its pinned source; rerun its setup or restore that node."
     return ""
 
 
 def parameters(params: dict) -> dict:
     if not isinstance(params, dict) or set(params) - {"image", "prompt", "seed", "frames", "sequence_seconds"}:
-        raise ValueError("Experimental VSA accepts only image, prompt, seed, frames and optional sequence_seconds.")
+        raise ValueError("VSA accepts only image, prompt, seed, frames and optional sequence_seconds.")
     if not isinstance(params.get("image"), str) or not params["image"].strip():
         raise ValueError("Choose one reference picture inside Studio.")
     prompt = params.get("prompt")
@@ -109,7 +109,7 @@ def require_image(path: Path) -> None:
     with Image.open(path) as image:
         image.load()
         if image.width > 512 or image.height > 288:
-            raise ValueError("Experimental VSA reference: at most 512x288. Resize a copy explicitly before queuing.")
+            raise ValueError("VSA reference: at most 512x288. Resize a copy explicitly before queuing.")
 
 
 def calibration_frames(frames: int) -> int:
@@ -172,7 +172,7 @@ def measured_profile(receipt: dict):
 def status(frames: int = FRAMES) -> dict:
     frames = calibration_frames(frames)
     base = {"installed": False, "available": False, "qualified": False, "state": "not_installed",
-            "experimental": True, "frames": frames, "seconds": seconds_of(frames),
+            "experimental": False, "frames": frames, "seconds": seconds_of(frames),
             "scope": SCOPE.replace("22 frames", f"{frames} frames").replace("0.917 s", f"{frames / 24:.3f} s"),
             "check_available": True}
     try:
@@ -181,7 +181,7 @@ def status(frames: int = FRAMES) -> dict:
         base.update(installed=True, state="needs_verification")
         receipt = features.saved(evidence_kind(frames), "")
         if receipt.get("ok") is not True:
-            return {**base, "why": f"Run the experimental {frames}-frame feature check first. Memory for this length is not yet measured."}
+            return {**base, "why": f"Run the VSA {frames}-frame feature check first. Memory for this length is not yet measured."}
         current, recorded = fingerprint(frames), receipt["fingerprint"]
         if not matches_qualification(recorded, current, compatibility(recorded), compatibility(current)):
             return {**base, "why": "The VSA recipe, runtime contract or hardware changed; check this recipe again."}
@@ -193,7 +193,7 @@ def status(frames: int = FRAMES) -> dict:
                 "runtime_updated": recorded != current, "hardware": recorded["hardware"],
                 "checked_at": receipt["checked_at"]}
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
-        return {**base, "state": "qualification_error", "why": f"Experimental VSA verification failed: {error}"}
+        return {**base, "state": "qualification_error", "why": f"VSA verification failed: {error}"}
 
 
 def route_status(baseline: dict | None = None, mode: dict | None = None) -> dict:
@@ -225,7 +225,7 @@ def require(params: dict) -> dict:
 def pressure(snapshot, previous=None) -> str:
     why = native.native_pressure(snapshot, previous)
     if not why and snapshot.gpu_dedicated_free_mb < 2048:
-        return "Dedicated GPU memory is below the experimental 2048 MiB reserve."
+        return "Dedicated GPU memory is below the VSA 2048 MiB reserve."
     return why
 
 
@@ -282,7 +282,7 @@ def memory_fit(snapshot=None, frames: int = FRAMES) -> dict:
                       "fits": snapshot.gpu_dedicated_free_mb - profile.gpu_need_mb >= 2048}
     return {"fits": fits, "measured": True, "need_mb": need, "available_mb": available, "floor_mb": floor,
             "host_prediction": host_prediction, "gpu_prediction": gpu_prediction,
-            "reason": "" if fits else f"Experimental VSA needs {need} MiB measured commit growth plus its {floor} MiB reserve; {available} MiB is free."}
+            "reason": "" if fits else f"VSA needs {need} MiB measured commit growth plus its {floor} MiB reserve; {available} MiB is free."}
 
 
 def wait_for_memory(frames: int, observations: dict, timeout_s: int = ADMISSION_TIMEOUT_S) -> None:
@@ -353,14 +353,14 @@ def configure_workflow(workflow: dict) -> list:
 
 def prepare_renderer(args) -> None:
     if sys.platform != "win32" or os.environ.get("STUDIO_REF2VA_VSA") != "1":
-        raise RuntimeError("Experimental VSA runs only through its supervised native Windows Studio recipe.")
+        raise RuntimeError("VSA runs only through its supervised native Windows Studio recipe.")
     qualification = os.environ.get("STUDIO_VSA_CHECK") == "1"
     frames = calibration_frames(int(os.environ.get("STUDIO_VSA_FRAMES", FRAMES))) if qualification else calibration_frames(args.frames)
     if ((args.width, args.height, args.frames, args.steps) != (WIDTH, HEIGHT, frames, 4)
             or len(args.ref or []) != 1 or args.ref_video or args.ref_audio or args.lora
             or args.crop or args.ref_video_sound or args.ref_size != "match" or args.engine != "comfy"
             or float(os.environ.get("SPARK_REF_CFG") or 1) != 1):
-        raise ValueError(f"Experimental VSA requires its supervised one-picture, {frames}-frame, four-pass recipe.")
+        raise ValueError(f"VSA requires its supervised one-picture, {frames}-frame, four-pass recipe.")
     require_image(Path(args.ref[0]))
     preflight(qualification=qualification, frames=frames, wait_for_admission=True)
 
@@ -413,7 +413,7 @@ def run_case(output: Path, image: Path, prompt: str, seed: int, observations: di
     if type(timeout_s) is not int or not 1 <= timeout_s <= TIMEOUT_S:
         raise ValueError("The VSA part deadline must be between 1 and 1800 seconds.")
     if output.exists():
-        raise RuntimeError("Experimental VSA needs a fresh output folder.")
+        raise RuntimeError("VSA needs a fresh output folder.")
     output.mkdir(parents=True)
     require_image(image)
     preflight(qualification, frames)

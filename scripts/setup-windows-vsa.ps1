@@ -23,6 +23,6 @@ if (Test-Path $target) {
     git -C $target -c core.autocrlf=false checkout --detach $commit
     if ($LASTEXITCODE -ne 0) { throw 'Pinned VSA node checkout failed.' }
 }
-Write-Host 'Pinned experimental VSA node installed; its Apache-2.0 LICENSE is retained.'
+Write-Host 'Pinned VSA node installed; its Apache-2.0 LICENSE is retained.'
 Write-Host 'Uses existing Torch and safetensors; no packages, model weights or H3 compiler/toolkit were installed.'
 Write-Host 'MiniMax H3 model licences still apply. Restart the Studio, then explicitly run the 22-frame VSA check.'
