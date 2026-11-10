@@ -51,6 +51,31 @@ def run(code: str) -> dict:
     return json.loads(done.stdout.strip().splitlines()[-1])
 
 
+def test_vsa_render_keeps_the_take_in_the_film_without_standard_recipe_fields():
+    got = run("""
+      SL.p = film(); SL.p.tf = { loras: [{id:"camera-motion"}] };
+      const scene = { id:"scene", name:"Scene" }, shot = { id:"shot", name:"Shot", takes:[], tf:{h3:"",h3Auto:true} };
+      answers["/api/slate/compile"] = { kind:"video-vsa", prompt:"Reference <Picture 1>.", plan:{image:"uploads/ref.png",seed:7,frames:175}, memory:{fits:true} };
+      answers["/api/jobs"] = { id:"vsa-test",params:{image:"uploads/ref.png",seed:7,frames:175} };
+      out.path = await slRender(scene,shot); out.take = shot.takes[0]; out.job = calls.find(c=>c[0]==="/api/jobs")[1];
+    """)
+    assert got["path"] == "renders/vsa-test-vsa/video.mp4"
+    assert got["take"]["model"] == "minimax-h3-ref2va-vsa"
+    assert got["take"]["settings"]["backend"] == "vsa"
+    assert got["job"]["kind"] == "video-vsa"
+    assert set(got["job"]["params"]) == {"image", "prompt", "seed", "frames"}
+
+
+def test_vsa_render_refusal_does_not_queue_a_take():
+    got = run("""
+      SL.p = film(); const scene={id:"scene",name:"Scene"},shot={id:"shot",takes:[],tf:{h3:"",h3Auto:true}};
+      answers["/api/slate/compile"]={kind:"video-vsa",prompt:"Reference.",plan:{},memory:{fits:false,reason:"Resize first"}};
+      try { await slRender(scene,shot); } catch(e) { out.error=e.message; }
+      out.queued=calls.some(c=>c[0]==="/api/jobs"); out.takes=shot.takes.length;
+    """)
+    assert got == {"error": "Resize first", "queued": False, "takes": 0}
+
+
 def test_the_first_ad_changes_a_sheet_instead_of_adding_a_second_one():
     got = run("""
       SL.p = film();

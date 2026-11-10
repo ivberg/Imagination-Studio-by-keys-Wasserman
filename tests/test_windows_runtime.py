@@ -58,6 +58,26 @@ def test_native_image_checker_outer_process_does_not_open_a_console(monkeypatch,
     assert server.running["process"] is None
 
 
+def test_vsa_supervisor_cannot_leave_its_queue_ownership(monkeypatch):
+    import windows_process
+    calls = []
+    process = SimpleNamespace(stdout=[], pid=123, wait=lambda *args: 0)
+    class Owned:
+        def __init__(self, **kwargs): calls.append(kwargs)
+        def spawn(self, *args, **kwargs): return process
+        def close(self): calls.append("closed")
+    monkeypatch.setattr(windows_process, "OwnedJob", Owned)
+    monkeypatch.setattr(server, "SPARK", False)
+    monkeypatch.setattr(server, "WINDOWS", False)
+    monkeypatch.setattr(server, "WIN32", True)
+    monkeypatch.setattr(server, "WINCUDA", True)
+    monkeypatch.setattr(server, "environment", lambda env: env)
+    monkeypatch.setattr(server, "running", {"process": None})
+    job = {"id": "test", "kind": "video-vsa", "params": {}, "status": "running", "log": ""}
+    assert server.run(job, ["python", "checker.py"], {})
+    assert calls == [{"job_commit_mb": 0, "breakaway": False}, "closed"]
+
+
 @pytest.fixture
 def install(tmp_path, monkeypatch):
     root = tmp_path / "runtime"

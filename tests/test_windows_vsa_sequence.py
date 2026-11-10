@@ -113,6 +113,31 @@ def test_sequence_stops_on_guard_failure_and_preserves_completed_parts(tmp_path,
     assert not any(call[0] == "assemble" for call in calls)
 
 
+@pytest.mark.parametrize("state", ["cancelled", "failed"])
+def test_parent_finalizes_killed_sequence_and_keeps_completed_clips(tmp_path, state):
+    output = tmp_path / "renders" / "test-vsa"
+    clip = output / "parts" / "001" / "video.mp4"
+    clip.parent.mkdir(parents=True)
+    clip.write_bytes(b"finished clip")
+    report = {"state": "partial", "active_part": 2, "parts": [{"clip": "parts/001/video.mp4", "seed": 7}]}
+    (output / "sequence.json").write_text(json.dumps(report))
+    job = {"id": "test", "params": params(), "status": state, "error": None}
+    vsa.finish_aborted_sequence(tmp_path, job)
+    saved = json.loads((output / "sequence.json").read_text())
+    assert saved["state"] == state and saved["active_part"] == 2 and saved["parts"] == report["parts"]
+    assert job["outputs"] == ["renders/test-vsa/sequence.json", "renders/test-vsa/parts/001/video.mp4"]
+    assert clip.read_bytes() == b"finished clip"
+    assert not (output / "sequence.json.tmp").exists()
+
+
+def test_parent_does_not_publish_report_paths_outside_sequence(tmp_path):
+    output = tmp_path / "renders" / "test-vsa"
+    output.mkdir(parents=True)
+    (output / "sequence.json").write_text(json.dumps({"state": "partial", "parts": [{"clip": "../../other.mp4"}]}))
+    with pytest.raises(ValueError, match="outside"):
+        vsa.finish_aborted_sequence(tmp_path, {"id": "test", "params": params(), "status": "cancelled"})
+
+
 def test_sequence_waits_after_reference_extraction_and_never_renders_if_recovery_fails(tmp_path, monkeypatch):
     calls, _ = fake_parts(tmp_path, monkeypatch)
     def wait(frames, observations, timeout_s):
@@ -171,6 +196,44 @@ def test_recovery_requires_two_consecutive_fits_after_delayed_memory_release(rec
     assert observations["consecutive_fits"] == 2 and observations["elapsed_s"] == 4
     assert observations["initial"]["at"] == 100 and observations["final"]["at"] == 104
     assert recovery.reads == [(100 + i, 158) for i in range(5)]
+
+
+def test_renderer_waits_for_commit_to_recover_after_supervisor_admission(recovery, monkeypatch):
+    monkeypatch.setattr(vsa, "prerequisites", lambda: "")
+    required = 33216 + 4096
+    seen = []
+    def fit(sample, frames):
+        available = sample.host_commit_limit_mb - sample.host_commit_used_mb
+        seen.append((frames, available))
+        return {"fits": available >= required, "need_mb": 33216, "floor_mb": 4096,
+                "available_mb": available, "reason": "" if available >= required else "18 MiB short"}
+    monkeypatch.setattr(vsa, "memory_fit", fit)
+    sample = recovery.sample()
+    recovery.samples.extend([
+        sample,
+        replace(sample, host_commit_used_mb=sample.host_commit_limit_mb - 37294),
+        replace(sample, host_commit_used_mb=sample.host_commit_limit_mb - 37451),
+        replace(sample, host_commit_used_mb=sample.host_commit_limit_mb - 37451),
+    ])
+    vsa.preflight(frames=158, wait_for_admission=True)
+    assert seen == [(158, 37294), (158, 37451), (158, 37451)]
+    assert recovery.now[0] == 102
+
+
+def test_renderer_recovery_keeps_the_same_deadline_and_prediction(recovery, monkeypatch):
+    monkeypatch.setattr(vsa, "prerequisites", lambda: "")
+    recovery.fits.extend([{"fits": False, "reason": "18 MiB short"}] * vsa.ADMISSION_TIMEOUT_S)
+    with pytest.raises(vsa.native.SafetyRefusal, match="within 60 seconds.*18 MiB short"):
+        vsa.preflight(frames=158, wait_for_admission=True)
+    assert recovery.now[0] == 160
+    assert len(recovery.reads) == 1 + vsa.ADMISSION_TIMEOUT_S
+
+
+def test_qualification_checks_live_floors_without_waiting_for_prior_evidence(recovery, monkeypatch):
+    monkeypatch.setattr(vsa, "prerequisites", lambda: "")
+    monkeypatch.setattr(vsa, "wait_for_memory", lambda *args: pytest.fail("Qualification does not use a previous peak"))
+    vsa.preflight(qualification=True, frames=158, wait_for_admission=True)
+    assert len(recovery.reads) == 1 and not recovery.fits
 
 
 def test_persistent_contention_times_out_with_exact_reason_and_no_policy_relaxation(recovery):
@@ -346,19 +409,15 @@ def test_cpu_assembly_produces_exact_frames_and_sound(tmp_path, monkeypatch):
 
 
 def test_sequence_ui_selects_checked_parts_and_submits_a_bounded_job():
-    from test_shell_page import run
-    page = (Path(__file__).resolve().parents[1] / "app" / "static" / "index.html").read_text(encoding="utf-8")
-    controls = page[page.index("function vsaLengths()"):page.index("function viewCreate()")]
-    out = run("globalThis.VSA = {image:'reference.png',prompt:'Use <Picture 1>.',seed:7,frames:22,mode:'sequence',sequenceSeconds:60};\n" + controls + """
+    from test_create_page import create_run
+    out = create_run("""
+      VSA.frames=22; VSA.mode="sequence"; VSA.sequenceSeconds=60;
       S.windows_vsa = {lengths:[{frames:22,seconds:22/24,qualified:true,available:true,installed:true},
                                {frames:73,seconds:73/24,qualified:true,available:true,installed:true},
                                {frames:124,seconds:124/24,qualified:false,available:false,installed:true}]};
-      globalThis.select = (obj,key,options) => el("select", {}, Object.values(options));
-      globalThis.choice = () => el("div"); globalThis.bind = (obj,key,node) => node;
-      globalThis.typed = node => node; globalThis.jobCard = () => el("div");
       vsaModeChanged(); out.frames = VSA.frames;
       const root = viewVsa(), start = button(root, "Render 60-second sequence");
-      out.enabled = !start.attrs.disabled; out.summary = text(root);
+      out.enabled = !start.attrs.disabled; out.summary = text(vsaControls());
       answers["/api/jobs"] = {id:"test"}; await start.attrs.onclick();
       out.params = calls.find(([path]) => path === "/api/jobs")[1].params;
       VSA.sequenceSeconds = 61; out.overLimit = button(viewVsa(), "Render 61-second sequence").attrs.disabled;
@@ -370,4 +429,4 @@ def test_sequence_ui_selects_checked_parts_and_submits_a_bounded_job():
     assert out["params"]["sequence_seconds"] == 60 and out["params"]["frames"] == 73
     assert "20 cold-start shots" in out["summary"] and "not a guaranteed first-frame anchor" in out["summary"]
     assert "Render 73 frames" in out["single"]
-    assert "Download video" in out["finished"] and "Sequence report" in out["finished"]
+    assert "Download" in out["finished"] and "Sequence report" in out["finished"]

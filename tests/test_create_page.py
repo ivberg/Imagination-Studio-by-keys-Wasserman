@@ -52,6 +52,35 @@ def create_run(code):
     """ + code)
 
 
+def test_production_board_routes_explicit_vsa_segments_without_standard_settings():
+    production = PAGE[PAGE.index("/* ---------- Production"):PAGE.index("/* ---------- Editor")]
+    out = create_run(production + """
+      globalThis.project={id:"test",preset:"small",quality:"standard",segments:[{start:"vsa",vsaImage:"uploads/ref.png",seconds:5,seed:0,scene:"A baker smiles.",prompt:""}]};
+      answers["/api/compose"]={prompt:"Reference <Picture 1>."};
+      answers["/api/jobs"]={id:"board-vsa"};
+      await generateSeg(0);
+      out.compose=calls.find(c=>c[0]==="/api/compose")[1];out.job=calls.find(c=>c[0]==="/api/jobs")[1];
+      out.output=project.segments[0].output;
+    """)
+    assert out["compose"]["referenced"] and out["compose"]["references"] == 1 and not out["compose"]["first_frame"]
+    assert out["job"]["kind"] == "video-vsa"
+    assert out["job"]["params"] == {"image": "uploads/ref.png", "prompt": "Reference <Picture 1>.", "frames": 124, "seed": 0}
+    assert out["output"] == "renders/board-vsa-vsa/video.mp4"
+
+
+@pytest.mark.parametrize("reason", ["lora", "canvas"])
+def test_production_board_refuses_unsupported_vsa_settings(reason):
+    production = PAGE[PAGE.index("/* ---------- Production"):PAGE.index("/* ---------- Editor")]
+    out = create_run(production + """
+      globalThis.project={id:"test",preset:"small",segments:[{start:"vsa",vsaImage:"uploads/ref.png",seconds:5,seed:7,prompt:"Reference."}]};
+      globalThis.lorasOf=()=>""" + ('[{id:"style"}]' if reason == "lora" else "[]") + """;
+      """ + ('S.presets.small.size=[1280,736];' if reason == "canvas" else "") + """
+      try { await generateSeg(0); } catch(e) {out.error=e.message;}
+      out.queued=calls.some(c=>c[0]==="/api/jobs");
+    """)
+    assert out["error"] and not out["queued"]
+
+
 def test_vsa_uses_all_five_shared_steps_without_supported_recipe_controls():
     out = create_run("""
       out.pages = [];

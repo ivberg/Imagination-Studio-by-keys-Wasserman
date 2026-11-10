@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT / "app"))
 import negation as N  # noqa: E402
 import server  # noqa: E402  (attaches Slate to the Studio's prompt builders)
 import slate  # noqa: E402
+import pytest
 
 
 def film(**shot) -> dict:
@@ -39,6 +40,46 @@ def test_a_shots_intent_stays_out_of_the_prompt():
     empty = slate.compile_shot(film(prompt=""), "shot-1")
     assert "audience" not in empty["prompt"] and any("no prompt yet" in w for w in empty["warnings"])
 
+
+def test_vsa_shot_uses_reference_prompt_and_only_the_bounded_recipe(monkeypatch):
+    import windows_video_vsa as vsa
+    monkeypatch.setattr(vsa.windows_cuda, "native_os", lambda: True)
+    monkeypatch.setattr(vsa, "require", vsa.parameters)
+    monkeypatch.setattr(vsa, "memory_fit", lambda **kwargs: {"fits": True, "reason": ""})
+    project = film()
+    tf = project["scenes"][0]["shots"][0]["tf"]
+    tf.update(start="vsa", vsa_image="uploads/reference.png", image="uploads/exact-first-frame.png", seed=0)
+    compiled = slate.compile_shot(project, "shot-1")
+    assert compiled["kind"] == "video-vsa" and compiled["mode"] == "vsa"
+    assert compiled["plan"] == {"image": "uploads/reference.png", "seed": 0, "frames": 124}
+    assert "<Picture 1>" in compiled["prompt"] and "at 0.00 seconds" not in compiled["prompt"]
+    assert "0:12.1" not in compiled["prompt"] and compiled["memory"]["fits"]
+    assert "video-vsa" not in slate.compile_shot(film(), "shot-1").get("kind", "")
+
+
+@pytest.mark.parametrize("change", ["lora", "drama3", "video", "canvas"])
+def test_vsa_shot_refuses_unsupported_production_features(change):
+    project = film()
+    tf = project["scenes"][0]["shots"][0]["tf"]
+    tf.update(start="vsa", vsa_image="uploads/reference.png")
+    if change == "lora": project["tf"]["loras"] = [{"id": "test", "strength": 1}]
+    if change == "drama3": tf["dialogue"] = "drama3"
+    if change == "video": tf["reference_video"] = "uploads/previs.mp4"
+    if change == "canvas": project["tf"]["res"] = "720p"
+    with pytest.raises(slate.HTTPException) as error:
+        slate.compile_shot(project, "shot-1")
+    assert error.value.status_code == 400
+
+
+def test_vsa_preflight_failure_is_explicit_and_never_claims_the_shot_fits(monkeypatch):
+    import windows_video_vsa as vsa
+    monkeypatch.setattr(vsa.windows_cuda, "native_os", lambda: True)
+    def refuse(params): raise ValueError("Resize a copy explicitly")
+    monkeypatch.setattr(vsa, "require", refuse)
+    project = film()
+    project["scenes"][0]["shots"][0]["tf"].update(start="vsa", vsa_image="uploads/large.png")
+    compiled = slate.compile_shot(project, "shot-1")
+    assert not compiled["memory"]["fits"] and compiled["memory"]["reason"] == "Resize a copy explicitly"
 
 def test_a_compiled_prompt_forbids_nothing_by_name():
     """Slate's own words (a locked camera, a shot without lines) say what is there, so the negation check has nothing

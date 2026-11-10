@@ -43,7 +43,16 @@ writing; adding `"resize":true` makes the copy with a 30-second tool timeout. Ne
 The Render step stays disabled until the selected picture has been checked and fits the recipe.
 Finished VSA clips/sequences use the normal Editor/download actions, can open their Library processing actions,
 and can be chosen for a soundtrack in Music. Those existing features retain their own prerequisites and guards.
-Production/Slate backend integration remains separate work.
+In Production/Slate, a shot can explicitly choose **Experimental VSA reference** under **Roll camera**.
+Its separate Library path is saved on the shot; prepare an oversized picture in Create first.
+The film must use 480p and 16:9. Duration (including music-bar slots) keeps the model-valid frame count;
+the quality preset becomes the fixed four-pass recipe. Extra LoRAs, Drama 3 voice references and previs clips
+are refused, not dropped. VSA takes stay attached to the film with their backend, seed and actual recipe,
+and use the same take review and Editor delivery. Existing text, first-frame, previous-shot and cast-still
+modes keep supported H3; none are silently converted to VSA.
+The simple Production board likewise offers **an experimental VSA reference** in each segment's **Opens on**.
+It saves a separate picture path, requires the 864x480 output preset and refuses project LoRAs. The normal
+segment queue and Editor handoff retain the resulting clip; text, image and previous-segment modes are unchanged.
 The existing experimental feature-check panel is collapsed by default in Create and Machine; expand it to run a check
 or inspect the length history. Qualification behavior is unchanged.
 **Machine -> Feature check: experimental Ref2VA VSA** queues the same explicit check. The API equivalent is:
@@ -57,6 +66,17 @@ The first check uses the bundled baker picture, resized in that job to 512x288. 
 22 frames at 24 fps (0.917 seconds), four Euler passes, sparsity 0.75**, with video/audio sigma shifts 12/3.
 Text, reference and audio tokens remain dense. Only generated-video attention is sparse.
 Every render is cold: gate transplantation mutates model modules, so a patched backend is never reused.
+Cancellation closes the queue-owned Windows process tree, including the native backend and observer.
+For sequences, the queue finalizes the interrupted report as cancelled/failed and publishes already completed
+parts alongside it. An interrupted part is not called successful, and completed parts are not overwritten.
+
+The upstream VSA patch currently matches the installed pin. Its packed-layout code retains dense text, audio
+and reference prefixes, and reads both keyframes and references; that makes more references plausible, not
+qualified on this laptop. Its supplied API example has one picture at 1344x768, 124 frames, and the same four-pass
+Turbo adapter. It does not demonstrate extra style LoRAs or multiple-picture/audio/video reference workflows.
+Another canvas, extra references and extra LoRAs each need separate correctness and host/commit/VRAM measurements
+before enabling them here. The upstream reference-video attention lifetime fix is already in this pin;
+there is no newer upstream patch to install as a substitute for those measurements.
 
 No successful local full-model render means **unverified**, even if synthetic adapter or CUDA primitive tests
 passed. A pass saves actual host, commitment and WDDM observations plus model checksums and runtime provenance.
@@ -84,6 +104,27 @@ An unmeasured length has an unknown peak: it is admitted on live floors and inde
 not assigned the shorter clip's memory profile. A memory refusal is a blocker, never a reason to relax the floors.
 The saved observations establish resource safety for this short recipe, **not visual fidelity or a laptop
 throughput claim**. Neither the author's RTX 4090 benchmark nor synthetic kernel results qualify larger clips.
+
+A local 175-frame single clip (7.292 seconds) completed under these guards; its observed minima were
+3063 MiB host available, 3448 MiB dedicated GPU free and 5392 MiB commit headroom. These are one run,
+not new admission floors or a qualification receipt. A subsequent three-part, 14-second attempt stopped
+before part 2 loaded: commit headroom was 37294 MiB against 37312 MiB required by the measured prediction
+and reserve. Part 1 remained available. Cancellation between parts also retained the completed clip
+and finalized the report while the owned backend stopped.
+The renderer's final preflight now uses the same bounded recovery wait as the sequence supervisor:
+Python startup can consume a narrow margin after the earlier admission. It requires two fresh fitting
+samples within 60 seconds before starting ComfyUI; persistent contention or any breached live floor
+still refuses the part. The measured prediction, error margin and reserves are unchanged.
+A subsequent three-part retry completed in 596 seconds: 336 decoded frames, exactly 14 seconds, 864x480
+and sound. Its first renderer initially had 37199 MiB commit headroom, 113 MiB below the same requirement;
+the bounded wait recovered before rendering. Across its three model parts, observed minima were
+4185 MiB host available, 3440 MiB dedicated GPU free and 8228 MiB commit headroom. The backend drained
+afterward. This is one successful local sequence, not a guarantee of fit or seamless continuity.
+
+Visual sampling of the earlier eight-second chain showed a close-up-to-wide jump at its join. Both that
+clip and the 175-frame clip moved the camera despite a locked-camera prompt. Treat these sequences as
+potentially visible cuts, not seamless extensions. Decoded audio had finite samples and stayed below
+full scale in the sampled chain, but this is not a listening test or proof of voice/sound continuity.
 
 ### Incremental frame calibration
 
