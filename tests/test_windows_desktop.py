@@ -224,9 +224,15 @@ def test_stop_timeout_never_force_kills_or_releases_identity(folder, monkeypatch
 
 def test_native_start_matches_launch_identity_not_windows_venv_trampoline_pid(folder, monkeypatch):
     desktop.write(folder / "desktop.json", {"default": "native", "backends": {"native": {"studio": "test"}}})
+    python = folder / "ui-venv" / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.touch()
+    python.with_name("pythonw.exe").touch()
     monkeypatch.setattr(desktop, "available", lambda *args: True)
     monkeypatch.setattr(desktop, "status", lambda: {"running": None})
     def popen(command, **kwargs):
+        assert command[0] == str(python.with_name("pythonw.exe"))
+        assert kwargs["creationflags"] & desktop.NO_WINDOW
         desktop.write(folder / "desktop-session.json", {
             "session": kwargs["env"]["STUDIO_DESKTOP_LAUNCH"], "supervisor": 222, "backend": "native", "token": "test"})
         return SimpleNamespace(pid=111, poll=lambda: None)
@@ -235,6 +241,7 @@ def test_native_start_matches_launch_identity_not_windows_venv_trampoline_pid(fo
     monkeypatch.setattr(desktop, "owned_status", lambda identity: matched.append(identity["supervisor"]) or {})
     desktop.launch("native")
     assert matched == [222]
+
 
 def test_stop_rechecks_busy_with_private_identity(folder, monkeypatch):
     desktop.write(folder / "desktop-session.json", {"session": "ours", "backend": "native", "token": "example"})

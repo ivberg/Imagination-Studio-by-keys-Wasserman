@@ -797,6 +797,11 @@ def reference(args) -> None:
         print(f"[tensorfold] LoRA {lora} at {strength:g} on the bf16 Ref2VA weights", flush=True)
     if vsa:
         model = windows_video_vsa.configure_workflow(w)
+        audit_name = "vsa_audit_" + uuid.uuid4().hex
+        w["102"] = {"class_type": "StudioVSAAudit",
+                    "inputs": {"model": model, "clip": ["3", 0], "audit_name": audit_name}}
+        w["6"]["inputs"]["clip"] = ["102", 1]
+        model = ["102", 0]
     w["10"] = {"class_type": "BasicScheduler", "inputs": {"model": model, "scheduler": "simple", "steps": steps, "denoise": 1.0}}
     w["11"] = {"class_type": "BasicGuider", "inputs": {"model": model, "conditioning": ["6", 0]}}
     guidance = float(os.environ.get("SPARK_REF_CFG") or 1.0)
@@ -825,6 +830,10 @@ def reference(args) -> None:
         forget_uploads()
     target = Path(args.output)
     fetch(item, target)
+    if vsa:
+        fetch({"filename": audit_name + ".json", "subfolder": "studio", "type": "output"},
+              target.with_suffix(".conditioning.json"))
+        target.with_suffix(".workflow.json").write_text(json.dumps(w, indent=2), encoding="utf-8")
     finish_sound(item, target, args.frames)
     if not cropped:
         crop_file(target, args.crop)
