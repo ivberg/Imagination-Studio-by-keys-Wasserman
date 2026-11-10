@@ -916,7 +916,20 @@ def compile_shot(project: dict, shot_id: str, chain: str | None = None) -> dict:
     fields = {"scene": picture, "camera": camera, "action": action, "dialogue": lines, "soundscape": extra.get("soundscape") or "",
               "music": music, "subjects": subjects, "people": bool(cast) or None,  # None: the builder reads the words
               **({"audio_notes": notes} if audios else {}), **({"definitions": definitions} if definitions else {})}
-    prompt = compose_references(fields, len(subjects)) if references else compose(fields, bool(image or previous), frames=frames)
+    vsa = start == "vsa"
+    if vsa:
+        if extra.get("reference_video") or dialogue == "drama3" or lora_list(extra.get("loras")) or lora_list(film.get("loras")) or any(sheet.get("lora") for sheet in [*cast, place or {}]):
+            raise HTTPException(400, "Experimental VSA accepts one picture, spoken words and sound; video/audio references and extra LoRAs are not supported.")
+        if ratio != "16:9" or tier != "480p":
+            raise HTTPException(400, "Experimental VSA requires the film's 480p, 16:9 canvas (864x480).")
+        if slot and slot["spare"] < 0:
+            raise HTTPException(400, "Split this music slot into model-valid clips before rendering with VSA.")
+        image = extra.get("vsa_image") or ""
+        fields["subjects"] = []
+        prompt = compose_references(fields, 1)
+        warnings.append("Experimental VSA: one reference picture, not an exact first frame; 864x480, four passes.")
+    else:
+        prompt = compose_references(fields, len(subjects)) if references else compose(fields, bool(image or previous), frames=frames)
     for one in negation.check_fields(fields)["negations"]:  # said, never rewritten (negation.py)
         warnings.append(f"“{one['phrase']}” ({one['field'].lower()}): the video model has no negative prompt, and what a prompt names tends to appear. Say what is there instead.")
     limit = 7000
@@ -950,6 +963,21 @@ def compile_shot(project: dict, shot_id: str, chain: str | None = None) -> dict:
             **({"reference_audios": audios} if audios else {}),
             **({"image": image} if image else {}), **({"first_frame_from": previous} if previous else {}),
             **({"reference_videos": [clip]} if clip else {})}
+    if vsa:
+        import windows_video_vsa
+        plan = {"image": image, "seed": int(extra["seed"]) if extra.get("seed") is not None else 1, "frames": frames}
+        memory = {"fits": False, "reason": ""}
+        try:
+            if not windows_video_vsa.windows_cuda.native_os():
+                raise ValueError("Experimental VSA is a native Windows backend.")
+            windows_video_vsa.require({**plan, "prompt": prompt})
+            memory = windows_video_vsa.memory_fit(frames=frames)
+        except (OSError, ValueError, RuntimeError) as error:
+            memory["reason"] = str(error)
+        if not memory["fits"]:
+            warnings.append("This shot will be refused when queued: " + memory["reason"])
+        return {"kind": "video-vsa", "prompt": prompt, "plan": plan, "mode": "vsa", "dialogue": dialogue,
+                "warnings": warnings, "chars": len(prompt), "memory": memory}
     mode = "references" if references or clip else "image" if image else "previous" if previous else "text"
     # the machine's memory (a DGX Spark's guard): said here, before the shot is queued, with what fits
     try:

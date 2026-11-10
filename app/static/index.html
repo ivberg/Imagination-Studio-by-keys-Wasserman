@@ -1081,9 +1081,17 @@ function viewCreate() {
 async function ensureProject() { if (project) return project; const list = await api("/api/projects"); project = list.length ? await api("/api/projects/" + list[0].id) : await api("/api/projects", { name: "Project 1" }); return project; }
 const saveProject = () => api("/api/projects/" + project.id, project, "PUT").catch(e => toast(e.message));
 const segJob = seg => seg.job && jobs.find(j => j.id === seg.job);
-async function composeSeg(seg, index) { const first = seg.start !== "text"; const r = await api("/api/compose", { fields: { scene: seg.scene, action: seg.action, camera: seg.camera, soundscape: seg.soundscape, music: "N/A",
-  dialogue: seg.line ? [{ voice: seg.voice, text: seg.line, language: "English" }] : [] }, first_frame: first }); seg.prompt = r.prompt; }
+async function composeSeg(seg, index) { const vsa = seg.start === "vsa", first = seg.start !== "text" && !vsa; const r = await api("/api/compose", { fields: { scene: seg.scene, action: seg.action, camera: seg.camera, soundscape: seg.soundscape, music: "N/A",
+  dialogue: seg.line ? [{ voice: seg.voice, text: seg.line, language: "English" }] : [] }, first_frame: first, ...(vsa ? {referenced:true,references:1,frames:framesOf(seg)} : {}) }); seg.prompt = r.prompt; }
 async function generateSeg(index) { const seg = project.segments[index]; if (!seg.prompt) await composeSeg(seg, index);
+  if (seg.start === "vsa") {
+    if (lorasOf(project).length) throw new Error("Experimental VSA does not support extra LoRAs; clear the project's LoRAs first.");
+    const size = S.presets[project.preset]?.size;
+    if (!size || size[0] !== 864 || size[1] !== 480) throw new Error("Experimental VSA requires the 864x480 output preset.");
+    const j = await api("/api/jobs", {kind:"video-vsa",title:"Segment " + (index + 1) + ": " + (seg.title || ""),
+      params:{image:seg.vsaImage || "",prompt:seg.prompt,frames:framesOf(seg),seed:Number(seg.seed ?? 1)}});
+    seg.job=j.id;seg.output="renders/" + j.id + "-vsa/video.mp4";return;
+  }
   const params = { prompt: seg.prompt, preset: project.preset, quality: project.quality, ...lengthOf(seg), seed: Number(seg.seed || 1), ...(lorasOf(project).length ? { loras: lorasOf(project) } : {}), output: "projects/" + project.id + "/seg" + (index + 1) + "_" + Date.now() + ".mp4" };
   if (seg.start === "image" && seg.image) params.image = seg.image;
   if (seg.start === "previous") { const prev = project.segments[index - 1]; if (!prev) throw new Error("the first segment has nothing to continue from"); const pj = segJob(prev);
@@ -1131,9 +1139,11 @@ function viewProduction() {
           el("button", { class: "small", onclick: () => { project.segments.splice(i, 1); saveProject(); render(); } }, "Remove")),
         el("div", { class: "row" }, keep(field("Title", bind(seg, "title", el("input"), saveProject))),
           el("div", { class: "fit", style: "width:250px" }, el("label", {}, "Length"), lengthPicker({ get frames() { return seg.frames; }, set frames(v) { seg.frames = v; }, get seconds() { return seg.seconds; }, set seconds(v) { seg.seconds = v; }, preset: project.preset }, () => { saveProject(); render(); })),
-          field("Opens on", select(seg, "start", { text: "nothing (text to video)", previous: "the last frame of the segment before", image: "an image from the library" }, () => { change(); render(); })),
+          field("Opens on", select(seg, "start", { text: "nothing (text to video)", previous: "the last frame of the segment before", image: "an image from the library", ...(S.windows_vsa ? {vsa:"an experimental VSA reference (not a first frame)"} : {}) }, () => { change(); render(); })),
           el("div", { class: "fit", style: "width:90px" }, el("label", {}, "Seed"), bind(seg, "seed", el("input", { type: "number" }), saveProject))),
         seg.start === "image" ? keep(field("Image path (copy from the Library tab)", bind(seg, "image", el("input", { placeholder: "scouts/…/scout_s3.png" }), saveProject))) : null,
+        seg.start === "vsa" ? el("div", {}, keep(field("VSA reference path (prepare a copy in Create first)", bind(seg, "vsaImage", el("input", {placeholder:"uploads/reference.png"}), change))),
+          el("div", {class:"note"}, "One reference up to 512x288; 864x480, four passes, 24 fps. The project's quality is replaced by this recipe. Extra LoRAs are refused; this is not an exact first-frame anchor.")) : null,
         field("Describe the scene / condition where it takes place", bind(seg, "scene", el("textarea", { style: "min-height:54px" }), change)), field("What happens to the characters inside the scene / clip", bind(seg, "action", el("textarea", { style: "min-height:54px" }), change)),
         el("div", { class: "row" }, field("Voice", bind(seg, "voice", el("input", { placeholder: "a warm female voice" }), change)), field("Spoken line (optional)", bind(seg, "line", el("input"), change))),
         field("Soundscape", bind(seg, "soundscape", el("input"), change)),

@@ -2490,6 +2490,13 @@ def perform_job(job: dict, worker: dict | None = None) -> None:
             seen.unlink(missing_ok=True)  # a preview is the job's while it runs only
         if job["status"] != "queued":
             job["finished"] = time.time()
+            if (WINDOWS or WIN32) and job["kind"] == "video-vsa":
+                import windows_video_vsa
+                try:
+                    windows_video_vsa.finish_aborted_sequence(HOME, job)
+                except (OSError, ValueError, KeyError, TypeError) as error:
+                    job["status"], job["error"] = "failed", f"Could not finalize the VSA sequence report: {error}"
+                    job["log"] += "\n[studio] " + job["error"] + "\n"
             if (WINDOWS or WIN32) and job["kind"] == "qualification" and job["status"] in ("failed", "cancelled"):
                 try:
                     windows_checks.save_outcome(job)

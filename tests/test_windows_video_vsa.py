@@ -211,7 +211,7 @@ def test_supervised_command_parses_with_the_real_renderer_and_fixed_reference_po
     image = tmp_path / "reference.png"
     Image.new("RGB", (512, 288)).save(image)
     preflights = []
-    monkeypatch.setattr(vsa, "preflight", lambda qualification=False, frames=22: preflights.append((qualification, frames)))
+    monkeypatch.setattr(vsa, "preflight", lambda qualification=False, frames=22, **kwargs: preflights.append((qualification, frames, kwargs)))
     monkeypatch.setattr(generation, "mac_release", lambda: None)
     captured = []
     monkeypatch.setattr(generation, "video", captured.append)
@@ -238,7 +238,7 @@ def test_supervised_command_parses_with_the_real_renderer_and_fixed_reference_po
     if frames != 22:
         monkeypatch.setenv("STUDIO_VSA_CHECK", "0")
         vsa.prepare_renderer(args)
-        assert preflights[-1] == (False, frames)
+        assert preflights[-1] == (False, frames, {"wait_for_admission": True})
         monkeypatch.setenv("STUDIO_VSA_CHECK", "1")
     monkeypatch.setattr(generation, "up", lambda: False)
     monkeypatch.setattr(generation, "side", lambda name: tmp_path / name)

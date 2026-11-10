@@ -229,7 +229,7 @@ def pressure(snapshot, previous=None) -> str:
     return why
 
 
-def preflight(qualification: bool = False, frames: int = FRAMES) -> None:
+def preflight(qualification: bool = False, frames: int = FRAMES, *, wait_for_admission: bool = False) -> None:
     frames = calibration_frames(frames)
     from windows_memory import WindowsSignals, WddmMemory, dedicated_snapshot, physical_memory_mb
     if why := prerequisites():
@@ -239,6 +239,10 @@ def preflight(qualification: bool = False, frames: int = FRAMES) -> None:
     if why := pressure(snapshot):
         raise native.SafetyRefusal(why)
     if qualification:
+        return
+    if wait_for_admission:
+        # Renderer imports can consume the small margin left by the supervisor's earlier admission.
+        wait_for_memory(frames, {})
         return
     found = memory_fit(snapshot, frames)
     if not found["fits"]:
@@ -358,7 +362,7 @@ def prepare_renderer(args) -> None:
             or float(os.environ.get("SPARK_REF_CFG") or 1) != 1):
         raise ValueError(f"Experimental VSA requires its supervised one-picture, {frames}-frame, four-pass recipe.")
     require_image(Path(args.ref[0]))
-    preflight(qualification=qualification, frames=frames)
+    preflight(qualification=qualification, frames=frames, wait_for_admission=True)
 
 
 def build(home: Path, params: dict, job_id: str) -> tuple[list[str], dict, list[str]]:
@@ -536,6 +540,29 @@ def run_sequence(output: Path, params: dict) -> dict:
             report["failed_part_observations"] = observation
         save()
         raise
+
+
+def finish_aborted_sequence(home: Path, job: dict) -> None:
+    """The queue owns the report after terminating the supervisor's job object."""
+    if "sequence_seconds" not in job["params"] or job["status"] not in ("cancelled", "failed"):
+        return
+    output = home / "renders" / f"{job['id']}-vsa"
+    target = output / "sequence.json"
+    if not target.is_file():
+        return
+    report = json.loads(target.read_text(encoding="utf-8"))
+    if report["state"] != "done":
+        report.update(state=job["status"], error=job.get("error") or "The sequence was cancelled.")
+        pending = output / "sequence.json.tmp"
+        pending.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        pending.replace(target)
+    job["outputs"] = [str(target.relative_to(home)).replace("\\", "/")]
+    for part in report["parts"]:
+        clip = (output / part["clip"]).resolve()
+        if not clip.is_relative_to(output.resolve()):
+            raise ValueError("The VSA sequence report names a clip outside its output folder.")
+        if clip.is_file():
+            job["outputs"].append(str(clip.relative_to(home.resolve())).replace("\\", "/"))
 
 
 def save_sweep(report: dict, path: Path) -> None:
