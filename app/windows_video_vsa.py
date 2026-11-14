@@ -209,6 +209,15 @@ def route_status(baseline: dict | None = None, mode: dict | None = None) -> dict
             "why": "" if available else baseline["why"]}
 
 
+def diagnostics(mode: dict | None = None) -> dict:
+    found = route_status(status(), mode)
+    found["lengths"] = [status(frames) for frames in CALIBRATION_FRAMES]
+    for row in found["lengths"]:
+        row["available"] = found["available"] and row["installed"]
+    found["qualification_summary"] = sweep_summary(found["lengths"])
+    return found
+
+
 def require(params: dict) -> dict:
     params = parameters(params)
     found = route_status()

@@ -183,6 +183,84 @@ def test_completed_checks_refresh_capabilities_and_cached_feature_states():
     assert out == {"available": True, "invalidated": [None, None, None, None]}
 
 
+VSA_FIXTURE = FIXTURE + """
+Object.assign(card, { id: "video-vsa", title: "Ref2VA VSA", group: "video",
+  open_tab: "Create", open_label: "Open VSA", open_video_backend: "vsa",
+  lengths: Array.from({length:21},(_,i) => {const frames=22+17*i;
+    return {frames,seconds:frames/24,installed:true,available:true,qualified:frames===22};}),
+  qualification_summary: {checked_count:1,total_count:21,
+    longest_passed:{frames:124,seconds:124/24,checked_at:"original date"}} });
+S.windows_vsa = card; S.feature_checks.features["video-vsa"] = "Ref2VA VSA";
+"""
+
+
+def test_vsa_checks_share_the_video_group_and_send_explicit_recipe_requests():
+    out = run(VSA_FIXTURE + """
+      WFC.data=data; WFC.scopes["video-vsa"]="124"; wfcDraw();
+      out.before=calls.length; out.text=text(box);
+      out.groups=featureCheckGroups(data.features).map(group=>group.id);
+      out.options=find(box,node=>node.tag==="select").kids.length;
+      await button(box,"Check the 124-frame recipe").attrs.onclick();
+      await button(box,"Check the basic 22-frame recipe").attrs.onclick();
+      await button(box,"Qualify clip lengths automatically").attrs.onclick();
+      out.posts=calls.filter(([,body])=>body!==undefined);
+      out.snapshot=S.windows_vsa===card;
+      clearTimeout(WFC.timer);
+    """)
+    assert out["before"] == 0 and out["groups"] == ["video"] and out["options"] == 21
+    assert "unwanted speech" in out["text"] and "not a length cap" in out["text"]
+    assert "5.167" in out["text"] and "original date" in out["text"]
+    assert out["snapshot"]
+    assert out["posts"] == [
+        ["/api/feature-checks/check", {"feature": "video-vsa", "frames": 124}],
+        ["/api/feature-checks/check", {"feature": "video-vsa", "frames": 22}],
+        ["/api/feature-checks/check", {"feature": "video-vsa", "sweep": True}],
+    ]
+
+
+def test_vsa_checks_disable_during_work_and_cancel_the_actual_sweep_job():
+    out = run(VSA_FIXTURE + """
+      WFC.data=data; card.job={id:"sweep-1",status:"running"}; wfcDraw();
+      out.selected=button(box,"Check running").attrs.disabled;
+      out.sweep=button(box,"Qualify clip lengths automatically").attrs.disabled;
+      await button(box,"Cancel check").attrs.onclick();
+      out.cancel=calls.find(([path])=>path.endsWith("/cancel"));
+      card.job=null; card.render_busy=true; wfcDraw();
+      out.render=button(box,"Check the 22-frame recipe").attrs.disabled;
+      clearTimeout(WFC.timer);
+    """)
+    assert out == {"selected": True, "sweep": True, "cancel": ["/api/jobs/sweep-1/cancel", {}], "render": True}
+
+
+def test_vsa_diagnostics_remain_when_badges_are_off_and_open_selects_vsa():
+    out = run(VSA_FIXTURE + """
+      card.available=true; card.qualified=true; WFC.data=data;
+      out.badge=text(featureBadge("video-vsa"));
+      S.feature_checks.mode.enabled=false; out.hidden=featureBadge("video-vsa")===null;
+      globalThis.startCreate=set=>{Object.assign(C,set);go("Create");};
+      wfcDraw(); out.diagnostics=!!find(box,node=>node.attrs?.["data-vsa-checks"]);
+      button(box,"Open VSA").attrs.onclick();
+      out.backend=C.videoBackend;out.goes=C.goes;out.tab=tab;out.posts=calls;
+    """)
+    assert "Qualified" in out["badge"] and out["hidden"] and out["diagnostics"]
+    assert out["backend"] == "vsa" and out["goes"] == "video" and out["tab"] == "Create"
+    assert out["posts"] == []
+
+
+def test_video_landing_does_not_apply_ordinary_h3_policy_to_vsa():
+    out = run(VSA_FIXTURE + """
+      card.available=true; card.qualified=true;
+      S.capabilities.video={available:false,installed:true,why:"H3 pool policy refuses"};
+      const page=viewVideo();
+      const vsa=button(page,"Ref2VA VSA");
+      out.enabled=!vsa.attrs.disabled;
+      out.standard=button(page,"A clip with sound").attrs.disabled;
+      out.badge=!!find(page,node=>node.attrs?.["data-feature-card"]==="video-vsa");
+      out.reason=capWhy("video-vsa");
+    """)
+    assert out == {"enabled": True, "standard": True, "badge": True, "reason": ""}
+
+
 def test_models_inventory_explains_installation_fit_and_links_independent_checks():
     out = discover_run("""
       const opened = []; globalThis.openFeatureCheck = kind => opened.push(kind);

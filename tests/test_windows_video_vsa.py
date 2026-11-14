@@ -425,16 +425,16 @@ def test_page_exposes_unmeasured_model_lengths_with_explicit_check_action():
       out.count = vsaLengths().length; out.default = vsaLength().qualified;
       VSA.frames = "124"; out.unmeasured = !vsaLength().qualified;
       const panel = vsaCheckPanel(); out.panel = text(panel);
-      await button(panel, "Check the 124-frame").attrs.onclick();
-      out.body = calls.find(([path]) => path === "/api/feature-checks/check")[1];
+      button(panel, "VSA feature checks").attrs.onclick();
+      out.focus = WFC.focus; out.posts = calls.filter(([,body]) => body !== undefined);
       VSA.frames = 39; out.checked = vsaLength().qualified;
       VSA.frames = 362; out.maximum = vsaLength().frames;
       VSA.frames = 363; out.invalid = vsaLength().available;
     """)
     assert out["count"] == 21 and out["default"] and out["checked"]
     assert out["unmeasured"] and not out["invalid"] and out["maximum"] == 362
-    assert "unmeasured lengths are not blocked" in out["panel"]
-    assert out["body"] == {"feature": "video-vsa", "frames": 124}
+    assert "Machine > Feature checks > Video" in out["panel"]
+    assert out["focus"] == "video-vsa" and out["posts"] == []
 
 
 def test_page_refreshes_completed_checks_and_retries_reported_failures():

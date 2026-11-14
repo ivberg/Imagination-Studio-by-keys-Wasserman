@@ -62,9 +62,13 @@ cancelled segments are eligible for the board's batch retry. Board and Slate han
 saved clip duration, rather than the requested shot length; the board overview shows the model-valid
 frame count and seconds. An unreadable clip or failed save leaves the
 existing timeline unchanged and reports the error.
-The existing VSA feature-check panel is collapsed by default in Create and Machine; expand it to run a check
-or inspect the length history. Qualification behavior is unchanged.
-**Machine -> Feature check: Ref2VA VSA** queues the same explicit check. The API equivalent is:
+VSA uses **Machine -> Feature checks -> Video -> Ref2VA VSA**, alongside the other restored diagnostics.
+Create's **VSA feature checks** link opens that card without running anything. The card offers the basic
+22-frame check, any selected model-valid length, the automatic length sweep, saved length history and
+normal queue cancellation. **Open VSA** selects the VSA backend in Create, not ordinary H3.
+Diagnostics and individual checks remain available when qualification gating/badges are off.
+Qualification behavior and memory guards are unchanged; technical passes do not certify perceptual
+audio quality or absence of unwanted speech. The API equivalent of the basic check is:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:7870/api/feature-checks/check -Method Post `
