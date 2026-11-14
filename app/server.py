@@ -2584,11 +2584,7 @@ def state() -> dict:
             "engine": ("CUDA · SD-Turbo (512x512 only)" if windows_storyboard.status()["available"] else "unavailable (Windows UI-only preview)") if WINDOWS else ("CUDA · TensorFold int8" if SPARK_ENGINE_LIB.exists() else "CUDA · ComfyUI") if SPARK else ("native Zig engine" if zig_ready() else "MLX engine")}
     if local_windows:
         import windows_video_vsa
-        out["windows_vsa"] = windows_video_vsa.route_status(windows_video_vsa.status(), selected_mode)
-        out["windows_vsa"]["lengths"] = [windows_video_vsa.status(frames) for frames in windows_video_vsa.CALIBRATION_FRAMES]
-        for row in out["windows_vsa"]["lengths"]:
-            row["available"] = out["windows_vsa"]["available"] and row["installed"]
-        out["windows_vsa"]["qualification_summary"] = windows_video_vsa.sweep_summary(out["windows_vsa"]["lengths"])
+        out["windows_vsa"] = windows_video_vsa.diagnostics(selected_mode)
         out["image_model_options"] = choices
         out["windows_runtime"] = {"qualification": selected_mode, "image_models": choices,
                                   "backend": "per-feature", "native_core": windows_cuda.status()}

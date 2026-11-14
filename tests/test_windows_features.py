@@ -232,6 +232,35 @@ def test_progressive_check_is_explicit_queue_work_with_duplicate_refusal(check_u
     assert check_ui.post("/api/windows/features/check", json={"feature": "finish", "command": "ignored"}).status_code == 400
 
 
+def test_vsa_card_exposes_lengths_and_latest_sweep_without_running_work(check_ui, monkeypatch):
+    import windows_video_vsa as vsa
+
+    diagnostic = {
+        "installed": True, "available": True, "qualified": True, "check_available": True,
+        "qualification_enabled": False, "why": "", "state": "qualified",
+        "lengths": [{"frames": 22, "seconds": 22 / 24, "qualified": True}],
+        "qualification_summary": {"checked_count": 1, "total_count": 21},
+    }
+    monkeypatch.setattr(vsa, "diagnostics", lambda mode: diagnostic)
+    monkeypatch.setattr(server, "enqueue", lambda *_args, **_kwargs: pytest.fail("GET must not run work"))
+    monkeypatch.setattr(server, "public", lambda job: job)
+    monkeypatch.setattr(server, "jobs", {
+        "sweep": {"id": "sweep", "kind": "qualification", "created": 2, "status": "running",
+                  "params": {"feature": vsa.KIND, "sweep": True}},
+        "render": {"id": "render", "kind": vsa.KIND, "created": 1, "status": "queued", "params": {}},
+    })
+    response = check_ui.get("/api/feature-checks")
+    assert response.status_code == 200, response.text
+    cards = [card for card in response.json()["features"] if card["id"] == vsa.KIND]
+    assert len(cards) == 1
+    card = cards[0]
+    assert card["group"] == "video" and card["open_video_backend"] == "vsa"
+    assert card["lengths"] == diagnostic["lengths"]
+    assert card["qualification_summary"] == diagnostic["qualification_summary"]
+    assert card["job"]["id"] == "sweep" and card["render_busy"]
+    assert card["available"] and not card["qualification_enabled"]
+
+
 def test_progressive_mutations_are_local_same_origin_and_native_tier_unchanged(check_ui, monkeypatch):
     assert check_ui.post("/api/windows/features/check", json={"feature": "hlg"},
                          headers={"origin": "http://example.invalid"}).status_code == 403

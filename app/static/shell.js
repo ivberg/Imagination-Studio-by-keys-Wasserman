@@ -1,7 +1,7 @@
 "use strict";
 function capWhy(kind) {
   if (!kind || !S || S.platform !== "windows") return "";
-  const capability = S.capabilities?.[kind];
+  const capability = kind === "video-vsa" ? S.windows_vsa : S.capabilities?.[kind];
   return capability?.available ? "" : capability?.why || "This action is unavailable on this Windows runtime. See Machine > Feature checks.";
 }
 // The studio's frame: a sidebar of two groups (Creative Engines, Studio Vaults) with the Agent between them, each room

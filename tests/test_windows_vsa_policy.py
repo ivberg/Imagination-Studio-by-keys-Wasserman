@@ -117,7 +117,7 @@ def test_shared_wizard_composes_a_single_picture_reference_with_sound(client, mo
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-def test_page_hides_qualification_controls_when_off_but_always_keeps_lengths_selectable(enabled):
+def test_create_links_to_checks_in_either_mode_and_keeps_lengths_selectable(enabled):
     from test_shell_page import run
     page = (Path(__file__).resolve().parents[1] / "app" / "static" / "index.html").read_text(encoding="utf-8")
     controls = page[page.index("function vsaLengths()"):page.index("function viewCreate()")]
@@ -135,17 +135,15 @@ def test_page_hides_qualification_controls_when_off_but_always_keeps_lengths_sel
       const root = el("div",{},vsaControls(),viewVsa()); out.text = text(root);
       out.enabled = !button(root,"Render 124 frames").attrs.disabled;
       out.options = find(root,n=>n.tag==="select").kids.length;
-      out.basic = Boolean(button(root,"Check the basic 22-frame"));
       out.automatic = Boolean(button(root,"Qualify clip lengths automatically"));
-      const panel = find(root,n=>n.tag==="details" && n.attrs["data-feature"]==="video-vsa");
-      out.collapsed = Boolean(panel && !panel.attrs.open);
+      out.before = calls.length;
+      button(root,"VSA feature checks").attrs.onclick();
+      out.focus = WFC.focus; out.tab = tab; out.posts = calls.slice(out.before);
       VSA.frames = 362; out.maximum = !button(viewVsa(),"Render 362 frames").attrs.disabled;
     """)
     assert out["enabled"] and out["maximum"] and out["options"] == 21
-    assert out["basic"] is enabled and out["automatic"] is enabled
-    assert out["collapsed"] is enabled
-    if enabled:
-        assert "Highest successful single clip: 3.042" in out["text"] and "not a length cap" in out["text"]
-    else:
-        assert "Feature check" not in out["text"] and "Highest successful" not in out["text"]
+    assert not out["automatic"] and out["focus"] == "video-vsa" and out["tab"] == "Machine"
+    assert out["posts"] == []
+    assert "Technical qualification does not verify soundscape adherence" in out["text"]
+    if not enabled:
         assert "locally checked" not in out["text"] and "unmeasured" not in out["text"]

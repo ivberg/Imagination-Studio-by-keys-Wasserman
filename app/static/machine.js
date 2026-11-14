@@ -24,7 +24,7 @@ const M = { storage: null, loading: false, history: null };
 const WFC = { data: null, error: "", timer: null, loading: false, changingMode: false, focus: null, selected: null, open: false, groups: {}, scopes: {} };
 function openFeatureCheck(kind) { WFC.focus = kind; WFC.selected = kind; WFC.open = true; go("Machine"); }
 function featureBadge(kind, options = {}) {
-  const c = options.state || S && S.capabilities && S.capabilities[kind];
+  const c = options.state || (kind === "video-vsa" ? S?.windows_vsa : S?.capabilities?.[kind]);
   const checks = S && S.feature_checks;
   if (!checks || !checks.supported || checks.mode?.enabled === false || !checks.features?.[kind] || !c) return null;
   const ready = c.qualified ?? c.available, label = ready ? "Qualified" : c.installed === false && kind !== "foley" ? "Setup required" : options.unqualified || "Not qualified";
@@ -187,6 +187,8 @@ async function wfcLoad() {
       if (typeof FIN !== "undefined") FIN.state = null;
       if (typeof SFX !== "undefined") SFX.state = null;
     }
+    const vsa = WFC.data.features.find(card => card.id === "video-vsa");
+    if (vsa && S) S.windows_vsa = vsa;
   } catch (e) { WFC.error = e.message; }
   WFC.loading = false;
   wfcDraw();
@@ -194,9 +196,10 @@ async function wfcLoad() {
   if (document.querySelector("#feature-check-section")?.open && WFC.data && WFC.data.features.some(wfcBusy))
     WFC.timer = setTimeout(wfcLoad, 2000);
 }
-async function wfcCheck(card) {
+async function wfcCheck(card, override) {
   const selected = card.qualification_levels?.length ? WFC.scopes[card.id] || wfcNextSelection(card) : null;
-  const recipe = selected?.startsWith("group:") ? { group: selected.slice(6) } : selected ? { scope: selected } : {};
+  const recipe = override || (card.id === "video-vsa" ? { frames: Number(WFC.scopes[card.id] || 22) }
+    : selected?.startsWith("group:") ? { group: selected.slice(6) } : selected ? { scope: selected } : {});
   try { await api(featureCheckApi("/check"), { feature: card.id, ...recipe }); toast("Queued: check " + card.title); }
   catch (e) { toast(e.message, 7000); }
   await wfcLoad();
@@ -204,6 +207,31 @@ async function wfcCheck(card) {
 function wfcNextSelection(card) {
   const group = card.qualification_groups?.find(group => group.remaining?.length);
   return group ? "group:" + group.id : card.next_scope || "basic";
+}
+function wfcVsaChecks(card, active) {
+  const lengths = card.lengths || [], summary = card.qualification_summary || {}, sweep = summary.sweep;
+  const longest = summary.longest_passed, selected = Number(WFC.scopes[card.id] || 22);
+  return el("div", { class: "stack", "data-vsa-checks": true },
+    el("div", { class: "note" }, "Technical qualification checks rendering, media output and memory safety, not audio instruction adherence. Baker tests still produced unwanted speech; an empty bakery had energetic ambience with no voices."),
+    el("div", { class: "note" }, "The basic 22-frame pass enables every model-valid length; separate length checks are evidence, not a length cap. Ordinary H3 is unchanged."),
+    el("div", { class: "note" }, longest
+      ? `Highest successful single clip: ${longest.seconds.toFixed(3)} s (${longest.frames} frames), recorded ${longest.checked_at}. ${summary.checked_count} of ${summary.total_count} lengths have separate checks.`
+      : "No successful single-clip length is recorded yet."),
+    summary.render_diagnostics?.length ? el("div", { class: "note" }, "Prior renders with different provenance are excluded from this summary.") : null,
+    sweep ? el("div", { class: "note" }, sweep.why || (sweep.state === "running"
+      ? `Automatic check in progress: ${sweep.active_frames} frames.`
+      : sweep.stop ? `Sweep ${sweep.state}: ${sweep.stop.frames} frames. ${sweep.stop.reason}` : `Sweep ${sweep.state}.`)) : null,
+    field("Recipe to check", el("select", { value: String(selected), disabled: active,
+      onchange: e => { WFC.scopes[card.id] = e.target.value; wfcDraw(); } },
+      lengths.map(row => el("option", { value: String(row.frames), selected: row.frames === selected },
+        `${row.frames} frames (${row.seconds.toFixed(3)} s) - ${row.qualified ? "separately checked" : "not separately checked"}`)))),
+    el("div", { class: "note" }, "Explicit cold-start renders use the bundled baker picture. Host, dedicated GPU and commit budgets stay separate; live floors, fresh telemetry and commit admission remain enforced. Historical host/GPU residency is advisory."),
+    el("div", { class: "note" }, "Automatic qualification reuses dated matching passes, then checks remaining lengths in increasing order. It stops at the first refusal, error or cancellation, with a two-hour budget. A stop is not an absolute hardware limit. Separate Foley/effects and perceptual audio quality are not qualified."),
+    el("div", { class: "row" },
+      selected !== 22 ? el("button", { class: "small", disabled: !card.installed || active,
+        onclick: () => wfcCheck(card, { frames: 22 }) }, "Check the basic 22-frame recipe") : null,
+      el("button", { class: "small", disabled: !card.installed || active,
+        onclick: () => wfcCheck(card, { sweep: true }) }, "Qualify clip lengths automatically")));
 }
 function wfcCheckDetails(card, ...content) {
   return card.qualification_levels?.length ? el("details", { class: "fold qualification-details" },
@@ -299,6 +327,7 @@ function wfcDraw() {
     put(box, groupBox);
     for (const card of group.cards) {
     const active = wfcBusy(card), evidence = card.evidence || {}, results = evidence.results || [];
+    const vsa = card.id === "video-vsa", checkBusy = active || vsa && card.render_busy;
     const budgets = card.memory || {};
     const lastAttempt = wfcAttempt(card), failed = !card.qualified && !active && lastAttempt;
     const required = (card.requirements || []).map(r => wfcGB(r.required_mb) + " " + r.pool + " (" + (r.basis || "unknown")
@@ -334,12 +363,17 @@ function wfcDraw() {
       failed || card.why ? el("div", { class: "note" }, failed ? lastAttempt.message : card.why) : null,
       card.next_step ? el("div", { class: "note" }, card.next_step) : null,
       wfcHistory(card),
+      vsa ? wfcVsaChecks(card, checkBusy) : null,
       card.qualification_levels?.length ? wfcRecipePicker(card, active) : null,
       el("div", { class: "row" },
-        card.check_available ? el("button", { class: "small", disabled: !card.installed || active, onclick: () => wfcCheck(card) },
-          active ? "Check " + job.status : card.qualification_levels?.length ? "Check selected recipes" : evidence.checked_at ? "Rerun check" : "Check this feature")
+        card.check_available ? el("button", { class: "small", disabled: !card.installed || checkBusy, onclick: () => wfcCheck(card) },
+          active ? "Check " + job.status : vsa ? `Check the ${WFC.scopes[card.id] || 22}-frame recipe` : card.qualification_levels?.length ? "Check selected recipes" : evidence.checked_at ? "Rerun check" : "Check this feature")
           : el("span", { class: "note m-flat" }, "Individual verification is not implemented yet."),
         card.available ? el("button", { class: "small", onclick: () => {
+          if (card.open_video_backend) {
+            startCreate({ goes: "video", videoBackend: card.open_video_backend });
+            return;
+          }
           if (card.open_query && typeof AP !== "undefined") { AP.cat = card.open_category || "all"; AP.q = card.open_query; }
           if (card.open_mode && typeof SFX !== "undefined") SFX.mode = card.open_mode;
           if (card.open_model && typeof C !== "undefined") {
@@ -464,7 +498,6 @@ function viewMachine() {
       el("div", { class: "panel" }, el("h2", {}, "Right now"), el("div", { id: "machstatus" }, el("div", { class: "note" }, "Waiting for the first reading…")),
         el("details", { class: "fold" }, el("summary", {}, "The memory guard"), el("div", { class: "note m-flat" }, where === "GPU" ? "The memory guard checks every clip before it is queued and again before a model loads, and refuses a clip that would leave the GPU under its floor. These readouts show what it sees; they do not change it." : "The memory guard checks every clip before it is queued and again before a model loads, and stops the renderer if memory falls under its floor. These readouts show what it sees; they do not change it."), memPanel()))));
   api("/api/telemetry/history").then(h => { M.history = (h.samples || []).map(s => ({ gpu: s.gpu, mem: s.mem })); if (SHELL.tel) machineLive(SHELL.tel); }).catch(() => {});
-  if (S.windows_vsa && typeof vsaCheckPanel === "function") put(wrap, vsaCheckPanel());
   setTimeout(() => { if (SHELL.tel) machineLive(SHELL.tel); }, 0);
   return wrap;
 }

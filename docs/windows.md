@@ -144,6 +144,10 @@ refusal reason directly only when the selected model is unavailable.
 Use **Check this feature**, **Check selected recipes** or **Rerun check** to queue work; **Cancel check**
 uses the same cancellation as the normal queue. **Refresh status** and **Download saved report** only read
 diagnostics. Failed or cancelled reruns show their attempt separately from any saved passing evidence.
+Ref2VA VSA has its own card in the **Video** group, separate from ordinary H3's pool policy.
+It offers basic/selected-length checks, an automatic length sweep and saved history. Create links to
+that card; **Open VSA** selects the low-memory backend. A technical pass verifies rendering and safety,
+not soundscape adherence: baker controls still produced unwanted speech.
 
 | Installed physical RAM | Default policy |
 |---|---|

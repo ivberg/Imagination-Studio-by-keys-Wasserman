@@ -735,45 +735,9 @@ function vsaModeChanged() {
   render();
 }
 function vsaCheckPanel() {
-  const found = vsaLength();
-  if (!found || S.windows_vsa.qualification_enabled === false) return null;
-  const check = jobs.find(j => j.kind === "qualification" && j.params.feature === "video-vsa" && !j.params.sweep && (j.params.frames || 22) === Number(VSA.frames));
-  const sweepJob = jobs.find(j => j.kind === "qualification" && j.params.feature === "video-vsa" && j.params.sweep);
-  const summary = S.windows_vsa.qualification_summary, sweep = summary && summary.sweep;
-  const longest = summary && summary.longest_passed;
-  const busy = jobs.some(j => ["queued", "running"].includes(j.status) && (j.kind === "video-vsa" || j.kind === "qualification" && j.params.feature === "video-vsa"));
-  return el("details", { class: "panel fold", "data-feature": "video-vsa" },
-    el("summary", {}, "Feature check: Ref2VA VSA"),
-    el("div", { class: "stack" },
-    el("div", { class: found.available ? "note" : "tip" }, found.available ?
-      "The basic check passed. Every valid clip length is selectable; unmeasured lengths are not blocked by qualification. Ordinary H3 is unchanged." : S.windows_vsa.why),
-    el("div", { class: "note" }, "Explicit, cold-start render on the bundled baker picture. Host, commit and dedicated GPU budgets stay separate; missing telemetry or unsafe memory stops the job."),
-    el("div", { class: "note" }, "Windows can reclaim/page host memory and DynamicVRAM adapts GPU residency: historical resident peaks are advisory. Measured commit admission, live host/GPU/commit floors and loader headroom remain enforced."),
-    el("div", { class: "note" }, longest ?
-      `Highest successful single clip: ${longest.seconds.toFixed(3)} s (${longest.frames} frames), recorded ${longest.checked_at}. ${summary.checked_count} of ${summary.total_count} lengths have separate feature checks; this is not a length cap.` :
-      "No successful single-clip length is recorded yet."),
-    summary && summary.render_diagnostics && summary.render_diagnostics.length ?
-      el("div", { class: "note" }, "Some prior renders do not match current provenance and are excluded from this summary.") : null,
-    sweep ? el("div", { class: sweep.state === "done" ? "note" : "tip" },
-      sweep.why || (sweep.state === "running" ?
-        `Automatic check in progress: ${sweep.active_frames} frames (${(sweep.active_frames / 24).toFixed(3)} s). Started ${sweep.started_at}.` :
-        sweep.stop ? `Sweep ${sweep.state === "cancelled" ? "cancelled" : "stopped"} at ${sweep.stop.seconds.toFixed(3)} s (${sweep.stop.frames} frames): ${sweep.stop.reason}. ${sweep.finished_at || sweep.started_at || ""}` :
-        `Sweep finished ${sweep.finished_at}. ${summary.checked_count === summary.total_count ? "All 21 model-valid clip lengths currently have matching local evidence through 362 frames (15.083 s)." : "Current matching evidence is shown above."} Dated passes may have been reused.`)) : null,
-    el("div", { class: "note" }, "Automatic qualification reuses dated matching passes and tests remaining lengths in increasing order, including clip audio. It stops at the first refusal, error or cancellation, with a two-hour budget. A stop may reflect current contention or telemetry, not an absolute hardware/OOM limit. Separate sound-effects/Foley jobs are not qualified by this check."),
-    el("button", { class: "small fit", disabled: !found.installed || busy, onclick: async () => {
-      try { await api("/api/feature-checks/check", { feature: "video-vsa", sweep: true }); await poll(); render(); }
-      catch (e) { toast(e.message); }
-    } }, "Qualify clip lengths automatically"),
-    Number(VSA.frames) !== 22 ? el("button", { class: "small fit", disabled: !found.installed || busy, onclick: async () => {
-      try { await api("/api/feature-checks/check", { feature: "video-vsa" }); await poll(); render(); }
-      catch (e) { toast(e.message); }
-    } }, "Check the basic 22-frame recipe") : null,
-    el("button", { class: "small fit", disabled: !found.installed || busy, onclick: async () => {
-      try { await api("/api/feature-checks/check", { feature: "video-vsa", frames: Number(VSA.frames) }); await poll(); render(); }
-      catch (e) { toast(e.message); }
-    } }, `Check the ${VSA.frames}-frame recipe${found.qualified ? " again" : ""}`),
-    check ? jobCard(check) : null,
-    sweepJob ? jobCard(sweepJob) : null));
+  return el("div", { class: "stack" },
+    el("button", { class: "small fit", onclick: () => openFeatureCheck("video-vsa") }, "VSA feature checks"),
+    el("div", { class: "note" }, "Saved results and explicit checks are in Machine > Feature checks > Video. Technical qualification does not verify soundscape adherence; baker tests still produced unwanted speech."));
 }
 function vsaControls() {
   const found = vsaLength();
@@ -798,7 +762,7 @@ function vsaControls() {
       "A failure or cancellation stops the sequence; completed shots stay in its folder.") : null,
     field("Seed", bind(C, "seed", el("input", { type: "number", min: 0, max: 4294967295 }))),
     el("div", { class: "note" }, "One reference picture is required in step 2; it is not a guaranteed first frame. Text-only generation, last frames, extra LoRAs, reference video/audio and supported H3's canvas/pass controls are outside this recipe. Their settings are kept separately and are not sent to VSA."),
-    el("div", { class: "note" }, "This is a separate low-memory experiment, not a replacement for the supported H3 engine. MiniMax H3 licence and territory restrictions apply."));
+    el("div", { class: "note" }, "This is a separate low-memory backend, not a replacement for the supported H3 engine. MiniMax H3 licence and territory restrictions apply."));
 }
 const vsaReferenceReady = () => !!(VSA.image && VSA.reference && VSA.reference.path === VSA.image &&
   VSA.reference.ready && !VSA.referenceBusy && !VSA.referenceError);

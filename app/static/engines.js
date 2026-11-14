@@ -54,7 +54,7 @@ const ENGINE_PAGES = {
       { art: "act-video-refs", sign: "video", title: "References", one: "Keep a face, a motion or a voice", run: () => startCreate({ goes: "video", start: "refs" }, 1),
         off: S && S.ref2va ? "" : "Needs Ref2VA: oneshot-setup.sh --ref2va" },
       S && S.windows_vsa ? { art: "act-video-refs", sign: "video", title: "Ref2VA VSA",
-        one: "Separate low-memory backend; selectable clip lengths and live memory guards", run: () => startCreate({ goes: "video", videoBackend: "vsa" }) } : null,
+        one: "Separate low-memory backend; selectable clip lengths and live memory guards", feature: "video-vsa", run: () => startCreate({ goes: "video", videoBackend: "vsa" }) } : null,
       { art: "start-long", sign: "video", title: "A long take", one: "Chained clips, 30 seconds and up", run: () => { const k = longFirst(); startCreate({ goes: "video", start: "text", ...(k ? { seconds: k } : {}) }); } },
       S && S.sharp ? { art: "start-sharp", sign: "video", title: "Sharp Spec", one: "Sam's locked recipe: 1376 × 768, 8 passes", run: () => { if (typeof sharpCreate === "function") sharpCreate(); go("Create"); } } : null].filter(Boolean) }),
   previs: () => ({ line: "Motion taken from a clip, and sets your own agent builds in Blender or Blockout.", marks: [mark("claude"), mark("codex")],
@@ -80,7 +80,7 @@ function engineLanding(id) { const r = ROOMS.find(x => x.id === id), e = ENGINE_
   const kinds = { "act-image-edit": "edit", "act-image-looks": "looks", "act-previs-motion": "motion",
     "start-voice": "voice", "start-song": "music", "start-sfx": "sfx" };
   e.cards = e.cards.map((card, index) => {
-    const feature = id === "video" ? "video" : id === "image" && index < 2 ? imageKind : kinds[card.art];
+    const feature = card.feature || (id === "video" ? "video" : id === "image" && index < 2 ? imageKind : kinds[card.art]);
     const unavailable = id === "image" && index < 2 && typeof imageModelWhy === "function" ? imageModelWhy() : capWhy(feature);
     return { ...card, feature, off: unavailable || card.off };
   });

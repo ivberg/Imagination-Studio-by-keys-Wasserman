@@ -246,7 +246,7 @@ def attach(server):
         cards = []
         with server.lock:
             current = [server.public(job) for job in server.jobs.values()
-                       if job["kind"] == "qualification"]
+                       if job["kind"] in ("qualification", vsa.KIND)]
         for kind in CHECKS:
             if kind in (*images.KINDS, *audio.KINDS, *library.KINDS, vsa.KIND):
                 continue
@@ -327,19 +327,20 @@ def attach(server):
                           "setup": windows_cuda.setup_hint("swap,h3-shared" if kind == "swap" else
                                                            "workflows" if kind == "mask" else
                                                            "workflows,library-h3,h3-shared")})
-        found = vsa.status()
+        found = vsa.diagnostics(selected_mode)
         receipt = features.saved(vsa.KIND, "")
         cards.append({**CHECKS[vsa.KIND].public(), **found, "backend": "native-vsa",
-                      "open_tab": "Create", "open_label": "Open VSA",
+                      "open_tab": "Create", "open_label": "Open VSA", "open_video_backend": "vsa",
                       "memory": {"minimum_installed_ram_mb": None, "minimum_label": "Full-model memory must be measured locally",
                                  "gpu_required": True, "job_commit_cap_mb": None,
                                  "lowest_tested_ram_mb": found.get("hardware", {}).get("physical_total_mb")},
                       "evidence": {"matches": found["qualified"], "checked_at": receipt.get("checked_at"),
                                    "results": receipt.get("results", [])},
                       "attempt": features.saved(vsa.KIND, "-attempt"),
-                      "job": max((job for job in current if job["params"].get("feature") == vsa.KIND
-                                  and not job["params"].get("sweep")
-                                  and job["params"].get("frames", vsa.FRAMES) == vsa.FRAMES),
+                      "render_busy": any(job["kind"] == vsa.KIND and job["status"] in ("queued", "running")
+                                         for job in current),
+                      "job": max((job for job in current if job["kind"] == "qualification"
+                                  and job["params"].get("feature") == vsa.KIND),
                                  key=lambda job: job["created"], default=None),
                       "setup": r"powershell -ExecutionPolicy Bypass -File scripts\setup-windows-vsa.ps1"})
         video = windows_runtime.native_status("video", selected_mode)
