@@ -461,6 +461,14 @@ clips under Clips). `POST /api/jobs {kind: "sfx", params: {prompt, seconds, nega
 `{kind: "foley", params: {video, prompt?, negative?, keep_sound?, foley_db?, seed?}}`; `GET /api/sound/state`,
 `GET /api/sound/takes`.
 
+The Library groups all media by the file's modification date in your local time: **Past 7 days** (today and the
+six days before), **This month**, **Last month**, then dated months within the past twelve calendar months.
+Older files are grouped by year. Each file appears once, with newer groups first; empty groups are omitted.
+The newest nonempty section opens by default, and your open/closed choices stay while the page is loaded.
+Name/folder search opens matching sections and hides empty ones; clearing it restores your choices.
+**Select all** includes matching files in closed sections too.
+These are browsing groups, not moved folders.
+
 The three actions on a sound effect's *Made here* card fit on one line; a Foley card's four actions live under **⋯**.
 **Delete** uses the Library's trash-and-Undo flow. A sound effect's audio and take record
 go together; a Foley take also removes its rendered video, never the original source clip. Files needed by queued
