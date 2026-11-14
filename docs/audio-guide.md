@@ -495,7 +495,8 @@ checks the waveform and records measured memory. It does **not** judge whether t
 Unsupported API settings are refused before queueing with the specific validation reason.
 Try several unlocked seeds and compare by ear. API selection is
 `{kind: "sfx", params: {sound_model: "stable-audio-3-small-sfx", prompt: "...", seconds: 5}}`;
-Omitting `sound_model` selects Small SFX on Windows and Spark, Stable Audio Open on Mac. To replay legacy effects,
+Omitting `sound_model` selects Small SFX on Windows, and Stable Audio Open on a Mac and on a DGX Spark (a Spark
+switches to Small SFX once it has a measured memory estimate there). To replay legacy effects,
 explicitly set `sound_model: "stable-audio-open-1.0"`; older saved takes still restore that model.
 Install Open explicitly with `setup-windows-cuda.ps1 -Parts sound-legacy` (or `-LegacySound` alongside other
 parts). It remains selectable; no existing weights or takes are deleted. A missing/unqualified default
@@ -518,11 +519,23 @@ Mac does not support this model. Spark's native ComfyUI integration is described
 above US$1 million yearly revenue); its text encoder also carries the Gemma Terms of Use. Do not redistribute
 weights. Stable Audio Open and MMAudio keep their existing licences and settings.
 
+The three actions on a sound effect's *Made here* card fit on one line; a Foley card's four actions live under **⋯**.
+**Delete** uses the Library's trash-and-Undo flow. A sound effect's audio and take record
+go together; a Foley take also removes its rendered video, never the original source clip. Files needed by queued
+or running jobs stay protected. Use **Undo** in the message or **Restore last deletion** in the Library to put them back.
+**View trash**, beside Undo, opens the Library's **Trash** panel. It shows the folder location, lets you copy its
+path to open in your file manager, and provides the restore and empty-trash controls.
+In the Library, tick **Select** on sound, voice, song, picture or clip cards, then use **Delete selected** above the
+cards. **Select all** includes sounds and follows the current filter. The small red trash icon deletes one card's
+file; the same icon appears on Sound effects cards. Confirmation and Undo apply to both single and bulk deletions.
+Library redraws keep the same Library node and loaded players, including audio, while the listing refreshes;
+the page retains its scroll position.
+
 **On a DGX Spark** (`bash oneshot-setup-spark.sh --sound`, about 12 GB with Foley in `$SPARK_MODELS/Sound-Comfy`) both run through
 the studio's ComfyUI server (`spark/comfy.sh`, with its memory guard beside it) as `spark/spark_generate.py sfx` and
 `foley`, never as standalone model code:
 
-- **Small SFX (default)** uses the existing pinned ComfyUI's native Stable Audio 3 support, Comfy-Org's checkpoint
+- **Small SFX (the default once it is measured on a Spark)** uses the existing pinned ComfyUI's native Stable Audio 3 support, Comfy-Org's checkpoint
   and T5Gemma encoder (3,457,648,943 bytes, 3.22 GiB together) at revision `75aad8836271cb5a5123fb58304fae5d3bb4b0f9`.
   Setup verifies SHA-256; `--verify --sound` checks without downloading or rendering. The initial distilled recipe
   uses eight passes, CFG 1, `lcm` / `simple`, no negative prompt, batch one, 1-5 seconds, stereo 44.1 kHz.
@@ -531,7 +544,7 @@ the studio's ComfyUI server (`spark/comfy.sh`, with its memory guard beside it) 
   not claimed identical. **No Spark memory measurement is available yet:** this model is installed/selectable but
   cannot queue or render until a guarded worker-Spark measurement establishes its own estimate. Windows
   measurements and Open's memory estimate are not reused. There is no automatic fallback or unsafe qualification bypass.
-- **Stable Audio Open (optional)** is added with `--sound-legacy`. It runs on ComfyUI's own Stable Audio nodes (the checkpoint, its T5-base encoder, the seconds as
+- **Stable Audio Open (the default until then)** is installed by `--sound` as well as `--sound-legacy`. It runs on ComfyUI's own Stable Audio nodes (the checkpoint, its T5-base encoder, the seconds as
   conditioning, KSampler with dpmpp_3m_sde_gpu on the exponential schedule), the files from Stability's gated repo
   with your own Hugging Face sign-in.
 - **Foley** runs on kijai's ComfyUI-MMAudio (MIT, pinned at `8eaeb72e`) with the Studio's own sampler node

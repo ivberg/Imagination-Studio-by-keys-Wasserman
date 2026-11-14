@@ -628,7 +628,7 @@ app.add_middleware(SecurityHeaders)
 
 WINDOWS_WRITES = re.compile(
     r"/api/(?:key(?:/new)?|settings|compose|prompt/check|estimate|upload|frame|clear|trash(?:/restore)?|storage/refresh|motion/packs/import|jobs(?:/[A-Za-z0-9_-]+/cancel)?|"
-    r"projects(?:/[A-Za-z0-9_-]+)?|slate/(?:projects(?:/[A-Za-z0-9_-]+)?|exists|compile|brain|package)|"
+    r"projects(?:/[A-Za-z0-9_-]+)?|slate/(?:projects(?:/[A-Za-z0-9_-]+)?|exists|compile|brain|package|trash/[A-Za-z0-9_-]+/restore)|"
     r"suite/import|suite/imports/[A-Za-z0-9_-]+/(?:slate|attach|motion)|"
     r"brains/(?:settings|test|(?:copilot|local)/(?:verify|default))|agent/(?:tasks(?:/[A-Za-z0-9_-]+/cancel)?|"
     r"threads(?:/[A-Za-z0-9_-]+(?:/(?:messages|cancel))?)?)|"
@@ -2415,6 +2415,8 @@ def perform_job(job: dict, worker: dict | None = None) -> None:
             lenient = sys.platform == "darwin" and os.environ.get("STUDIO_MEMORY_GUARD", "").strip().lower() != "strict"
             job["log"] += memory_manager.admit(job, lambda: job_fit(job), wait_s=0 if lenient else None,
                                                mode="warn" if lenient else None, stopped=stopping.is_set)
+            # the thermal gate (memory_manager.thermal_admit): a GPU job waits for the machine to cool first
+            job["log"] += memory_manager.thermal_admit(job, stopped=stopping.is_set)
         if params.get("first_frame_from"):  # continuity: open on the last frame of an earlier clip
             source = inside(params["first_frame_from"])
             if not source.is_file():
@@ -2974,6 +2976,8 @@ def queue_job(body: dict) -> dict:
            "finished": None, "estimate": swap_estimate(params) if kind in swap.KINDS else clip_estimate(kind, params, referenced, ref_media)}
     if placement is not None:
         job["placement"] = placement
+    if isinstance(body.get("sender"), str) and body["sender"].strip():
+        job["sender"] = body["sender"].strip()[:120]  # the Spark that sent this clip and follows it (sparks.py)
     if referenced:  # the passes a reference clip runs: the number set by hand, or the model's 20, or the adapter's 4
         job["passes"] = int(params["steps"]) if params.get("steps") not in (None, "") else 4 if params.get("ref_turbo") else 20
     if kind in ("video", "studio", "long"):
@@ -3765,10 +3769,55 @@ memory_manager.register(memory_manager.Module("music", "the song engine", music_
                                               held_mb=lambda: gained_mb(music.room_mb())))
 memory_manager.register(memory_manager.Module("comfy", "ComfyUI and its cached models", comfy_loaded,
                                               lambda why: (stop_session_comfy(), not comfy_loaded())[1], held_mb=comfy_held_mb))
-memory_manager.register(memory_manager.Module("bolt", bolt.NAME, bolt_loaded, bolt.release, held_mb=bolt.held_mb,
+def release_bolt(why: str) -> bool:
+    """Bolt given back to the memory manager. ``bolt.release`` also holds the engine, and only the work loop lifts
+    that hold (``bolt.queue_empty``), so the loop is woken: an idle queue lifts it at once, a busy one after its jobs.
+    Without the wake, a release by the watch or by /api/memory/release on an idle queue held Bolt until some job ran,
+    and the Studio's brain waited on it (#242)."""
+
+    released = bolt.release(why)
+    wake.set()
+    return released
+
+
+memory_manager.register(memory_manager.Module("bolt", bolt.NAME, bolt_loaded, release_bolt, held_mb=bolt.held_mb,
                                               busy=lambda: bool(bolt.summary().get("in_flight"))))
 memory_manager.attach_log(HOME)
-MEMORY_WATCH = memory_manager.Watch(lambda: list(jobs.values()))
+THERMAL_RETRIES: dict = {}  # a job queued again after a thermal stop -> the job it repeats (it is not repeated twice)
+
+
+def thermal_stop(job: dict, why: str) -> None:
+    """The watch's live thermal stop (memory_manager.ThermalStop): the render is cancelled as Cancel does it, its
+    reason in its error and log, and queued again once: the new job waits at the thermal gate until the machine has
+    cooled. A job that was itself such a repeat is not queued a third time. A clip another Spark sent here is not
+    queued again on this one: that Spark follows the job it sent, sees it cancelled and places the clip again itself
+    (sparks.py), so a repeat here would render on the hot machine for nobody (#242)."""
+
+    try:
+        cancel(job["id"])
+    except HTTPException as error:
+        job["log"] += f"[studio] heat: the render could not be stopped ({error.detail})\n"
+        return
+    said = f"Stopped to protect the machine: {why}."
+    again = None
+    if job.get("sender"):
+        said += f" {job['sender']} sent this clip and places it again."
+    elif job["id"] not in THERMAL_RETRIES:
+        try:
+            again = queue_job({"kind": job["kind"], "title": job.get("title") or job["kind"], "params": dict(job["params"])})
+            THERMAL_RETRIES[again["id"]] = job["id"]
+            said += f" It is queued again as {again['id']}, which starts once the machine has cooled."
+        except (HTTPException, ValueError, TypeError, KeyError, RuntimeError) as error:
+            said += f" It could not be queued again ({getattr(error, 'detail', error)}): queue it once the machine is cool."
+    else:
+        said += " It was already a repeat after a thermal stop, so it is not queued again: let the machine cool first."
+    with lock:
+        job["error"] = said
+        job["log"] += f"[studio] heat: {said}\n"
+    memory_manager.note("requeued (heat)" if again else "not requeued (heat)", job=job["id"], again=again and again["id"])
+
+
+MEMORY_WATCH = memory_manager.Watch(lambda: list(jobs.values()), on_hot=thermal_stop)
 
 
 @app.get("/api/memory")

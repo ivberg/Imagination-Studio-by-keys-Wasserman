@@ -291,21 +291,33 @@ def test_the_sound_guard_is_measured_or_refuses(monkeypatch):
     assert not unknown["fits"] and "not been measured" in unknown["reason"]
 
 
-def test_spark_audio3_default_is_not_a_windows_runner_or_an_implicit_legacy_fallback(spark, monkeypatch):
+def test_a_spark_keeps_stable_audio_open_until_small_sfx_is_measured_there(spark, monkeypatch):
+    """Small SFX has no memory estimate on a DGX Spark yet, so nothing of it queues there. Until it has one, a sound
+    effect asked for without a model (the page, the API, the MCP tool) renders with Stable Audio Open; asking for
+    Small SFX by name is still refused with its own reason, never swapped for Open. With the estimate, Small SFX is
+    the default, as on Windows."""
+
+    import memory_guard
     import windows_audio3
     monkeypatch.setattr(windows_audio3, "status", lambda: pytest.fail("Spark must not inspect Windows qualification"))
     monkeypatch.setattr(windows_audio3, "prerequisites", lambda: pytest.fail("Spark must not use Windows admission"))
     router, build, _, _ = spark["attach"]()
     state = TestClient(_app(router)).get("/api/sound/state").json()
-    assert state["default_model"] == windows_audio3.MODEL
-    assert not state["kinds"]["sfx"]["ready"]
-    assert state["models"][sound.SFX_MODEL]["ready"]
-    with pytest.raises(HTTPException, match="native Stable Audio 3"):
-        build("sfx", {"prompt": "glass shatters"}, "small")
-    command, _, _ = build("sfx", {"sound_model": sound.SFX_MODEL, "prompt": "glass shatters"}, "open")
+    assert not sound.spark_measured() and state["default_model"] == sound.SFX_MODEL
+    assert state["kinds"]["sfx"]["ready"] and state["models"][sound.SFX_MODEL]["label"] == "Stable Audio Open 1.0"
+    assert not state["models"][windows_audio3.MODEL]["ready"]
+    command, _, _ = build("sfx", {"prompt": "glass shatters"}, "open")
     assert command[command.index("--sound-model") + 1] == sound.SFX_MODEL
+    with pytest.raises(HTTPException, match="native Stable Audio 3"):
+        build("sfx", {"sound_model": windows_audio3.MODEL, "prompt": "glass shatters"}, "small")
     assert sound.default_model() == sound.SFX_MODEL  # attaching a Spark does not change a Mac's defaults
-    assert sound.parameters("sfx", {"prompt": "rain"}, spark=True)["sound_model"] == windows_audio3.MODEL
+    assert sound.parameters("sfx", {"prompt": "rain"}, spark=True)["sound_model"] == sound.SFX_MODEL
+    monkeypatch.setitem(memory_guard.SOUND_ESTIMATE, windows_audio3.MODEL, (6_000, 40))
+    assert sound.spark_measured() and sound.default_model(spark=True) == windows_audio3.MODEL
+    assert sound.default_model() == sound.SFX_MODEL
+    measured = TestClient(_app(router)).get("/api/sound/state").json()
+    assert measured["default_model"] == windows_audio3.MODEL
+    assert measured["models"][sound.SFX_MODEL]["label"] == "Stable Audio Open 1.0 (legacy, optional)"
 
 
 def test_spark_audio3_installed_still_needs_its_own_measured_admission(spark, monkeypatch):
@@ -322,8 +334,8 @@ def test_spark_audio3_installed_still_needs_its_own_measured_admission(spark, mo
         path.write_bytes(b"w")
     assert spark_audio3.status()["installed"] and not spark_audio3.status()["available"]
     _, build, _, _ = spark["attach"]()
-    with pytest.raises(HTTPException, match="not been measured"):
-        build("sfx", {"prompt": "glass shatters", "seconds": 5, "seed": 0}, "small")
+    with pytest.raises(HTTPException, match="not been measured"):  # asked for by name: refused, never swapped for Open
+        build("sfx", {"sound_model": spark_audio3.MODEL, "prompt": "glass shatters", "seconds": 5, "seed": 0}, "small")
     assert not spark["guard"].sound_check(spark_audio3.MODEL, 5, total_mb=0)["fits"]
     # Only this test supplies a synthetic estimate: it is not a hardware measurement.
     monkeypatch.setitem(spark["guard"].SOUND_ESTIMATE, spark_audio3.MODEL, (8_000, 10))

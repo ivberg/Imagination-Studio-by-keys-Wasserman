@@ -50,9 +50,22 @@ LICENCES = {"sfx": "Stable Audio Open 1.0 · Stability AI Community License (fre
 SFX_MODEL = "stable-audio-open-1.0"
 
 
-def default_model(*, spark: bool = False) -> str:
+def spark_measured() -> bool:
+    """Small SFX has a measured memory estimate on a DGX Spark (spark/memory_guard.py SOUND_ESTIMATE). Until it has
+    one, nothing of it queues there, so it is not what a Spark picks by itself."""
+
+    import memory_guard
     import windows_audio3
-    return windows_audio3.MODEL if WINDOWS or WINCUDA or spark else SFX_MODEL
+    return windows_audio3.MODEL in memory_guard.SOUND_ESTIMATE
+
+
+def default_model(*, spark: bool = False) -> str:
+    """Small SFX on native Windows, and on a DGX Spark once it is measured there. A Spark without the measurement
+    keeps Stable Audio Open, so a sound effect asked for without a model (the page, the API, the MCP tool) still
+    renders; a Mac keeps Stable Audio Open."""
+
+    import windows_audio3
+    return windows_audio3.MODEL if WINDOWS or WINCUDA or (spark and spark_measured()) else SFX_MODEL
 
 
 def parameters(kind: str, params: dict, *, spark: bool = False) -> dict:
@@ -266,14 +279,14 @@ def attach(home: Path, pack: Path, spark: bool, inside, relative, room=None, sec
             new = spark_audio3.status()
         else:
             new = windows_audio3.status()
+        selected = default_model(spark=spark)
         choices = {SFX_MODEL: {**kinds["sfx"], "id": SFX_MODEL,
-                              "label": "Stable Audio Open 1.0 (legacy, optional)" if WINDOWS or WINCUDA or spark else "Stable Audio Open 1.0",
+                              "label": "Stable Audio Open 1.0 (legacy, optional)" if selected != SFX_MODEL else "Stable Audio Open 1.0",
                               "seconds": (5, 5) if bounded_windows("sfx") else SFX_SECONDS, "negative": True},
                    windows_audio3.MODEL: {**new, "ready": new["available"], "id": windows_audio3.MODEL,
                                           "label": windows_audio3.TITLE, "seconds": windows_audio3.SECONDS,
                                           "licence": windows_audio3.LICENCE, "negative": False,
                                           "bounded": True, "setup": new.get("setup") if spark and not (WINDOWS or WINCUDA) else windows_audio3.SETUP if WINDOWS or WINCUDA else None}}
-        selected = default_model(spark=spark)
         kinds["sfx"] = choices[selected]
         return {"kinds": kinds, "models": choices, "default_model": selected,
                 "seconds": {"sfx": choices[selected]["seconds"],

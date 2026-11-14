@@ -1248,7 +1248,7 @@ def sound(args) -> None:
     import sound_generate  # the Mac runner's ffmpeg laying and take file; nothing of its models is imported
 
     started, foley = time.time(), args.kind == "foley"
-    audio3 = not foley and getattr(args, "sound_model", spark_audio3.MODEL) == spark_audio3.MODEL
+    audio3 = not foley and getattr(args, "sound_model", "") == spark_audio3.MODEL
     args.steps = (8 if args.steps is None else args.steps) if audio3 else args.steps or (FOLEY_STEPS if foley else SFX_STEPS)
     args.cfg = args.cfg if args.cfg is not None else (FOLEY_CFG if foley else 1 if audio3 else SFX_CFG)
     if foley:
@@ -1483,8 +1483,9 @@ def main() -> None:
         f.add_argument("--seed", type=int, default=1)
         f.add_argument("--steps", type=int); f.add_argument("--cfg", type=float)
         f.add_argument("--seconds", type=float, help="sfx: 1 to 5 for Small SFX, 1 to 47 for Open")
+        # Small SFX once it has a measured estimate here (memory_guard.SOUND_ESTIMATE); until then Stable Audio Open
         f.add_argument("--sound-model", choices=(spark_audio3.MODEL, "stable-audio-open-1.0"),
-                       default=spark_audio3.MODEL)
+                       default=spark_audio3.MODEL if spark_audio3.MODEL in memory_guard.SOUND_ESTIMATE else "stable-audio-open-1.0")
         f.add_argument("--video", help="foley: the clip"); f.add_argument("--max-seconds", type=float, default=FOLEY_SECONDS[1])
         f.add_argument("--foley-db", type=float, default=-6.0); f.add_argument("--replace", action="store_true")
         f.add_argument("--clip-out"); f.add_argument("--take"); f.add_argument("--home")

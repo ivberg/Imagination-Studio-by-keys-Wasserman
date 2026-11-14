@@ -126,8 +126,10 @@ STUDIO_PIN=(huggingface_hub==1.33.0 fastapi==0.142.2 uvicorn==0.54.0 python-mult
 IMAGE_ONLY=0; RENDER=1; VERIFY=0; REF2VA=0; MOTION=0; VOICE=0; UPGRADE=0; LORAS=""; H3_BASE=0; WORKFLOWS=1; IMAGE_EDIT=0; FLUX3=0; MOSS=0; MUSIC=0; SOUND=0; SOUND_LEGACY=0; BOLT=0; TRAIN=0; GRAPHICS=""; FINISH=""; YUE2=0; SWAP=0; MEMGUARD=1; MEMGUARD_FOREIGN=0
 for arg in "$@"; do
   case "$arg" in
+    # --sound also asks for Stable Audio Open: Small SFX has no measured memory estimate on a DGX Spark yet, so Open is
+    # the model a sound effect renders with there. Without access to its gated page it is skipped, as before.
     --sound-legacy) SOUND=1; SOUND_LEGACY=1;;
-    --ref2va) REF2VA=1;; --swap) SWAP=1;; --h3-base) H3_BASE=1;; --image-edit) IMAGE_EDIT=1;; --flux3) FLUX3=1;; --moss) MOSS=1;; --music) MUSIC=1;; --yue2) YUE2=1;; --bolt) BOLT=1;; --train) TRAIN=1;; --graphics) GRAPHICS=1;; --no-graphics) GRAPHICS=0;; --finish) FINISH=1;; --no-finish) FINISH=0;; --sound) SOUND=1;; --motion) MOTION=1;; --voice) VOICE=1;; --image-only) IMAGE_ONLY=1;; --no-render) RENDER=0;; --verify) VERIFY=1; RENDER=0;; --upgrade) UPGRADE=1; RENDER=0; MOTION=1;;
+    --ref2va) REF2VA=1;; --swap) SWAP=1;; --h3-base) H3_BASE=1;; --image-edit) IMAGE_EDIT=1;; --flux3) FLUX3=1;; --moss) MOSS=1;; --music) MUSIC=1;; --yue2) YUE2=1;; --bolt) BOLT=1;; --train) TRAIN=1;; --graphics) GRAPHICS=1;; --no-graphics) GRAPHICS=0;; --finish) FINISH=1;; --no-finish) FINISH=0;; --sound) SOUND=1; SOUND_LEGACY=1;; --motion) MOTION=1;; --voice) VOICE=1;; --image-only) IMAGE_ONLY=1;; --no-render) RENDER=0;; --verify) VERIFY=1; RENDER=0;; --upgrade) UPGRADE=1; RENDER=0; MOTION=1;;
     --all) SWAP=1; REF2VA=1; H3_BASE=1; IMAGE_EDIT=1; FLUX3=1; MOSS=1; MUSIC=1; YUE2=1; SOUND=1; BOLT=1; VOICE=1; MOTION=1; TRAIN=1; GRAPHICS=1; FINISH=1;;  # every feature
     --no-workflows) WORKFLOWS=0;;
     --no-memguard) MEMGUARD=0;; --memguard-stop-foreign) MEMGUARD_FOREIGN=1;;  # the machine memory guard (scripts/memguard.py)
@@ -538,7 +540,7 @@ if [ "$SOUND" = 1 ]; then
   say "Sound effects and foley for ComfyUI: Stable Audio 3 Small SFX, MMAudio large_44k_v2 and its nodes -> $MODELS/Sound-Comfy"
   [ "$VERIFY" = 1 ] || { echo "  Stable Audio 3: Stability AI Community License (an enterprise licence above US\$1M yearly revenue)."
     echo "  T5Gemma: Gemma Terms of Use. MMAudio weights: CC-BY-NC 4.0, non-commercial."
-    echo "  Stable Audio Open is optional (--sound-legacy); its Hugging Face gate still applies."; }
+    echo "  Stable Audio Open renders sound effects until Small SFX is measured on this machine; its Hugging Face gate still applies."; }
   SND="$MODELS/Sound-Comfy"
   [ -f "$PREFIX/ComfyUI/comfy/text_encoders/sa3.py" ] || die "this ComfyUI lacks Stable Audio 3: run without --verify"
   AUDIO3_ARGS=()

@@ -245,7 +245,8 @@ OpenAI's **tiktoken** (MIT), installed in YuE2's environment. The pack ships no 
 Community License**: free for research and for a business under US$1 million of yearly revenue; above that,
 Stability's own licence. Its page on Hugging Face is gated.
 
-**Stability AI** also made **Stable Audio 3 Small SFX**, the default sound model on Windows and DGX Spark.
+**Stability AI** also made **Stable Audio 3 Small SFX**, the default sound model on Windows, and on a DGX Spark
+once it has a measured memory estimate there (until then a Spark keeps Stable Audio Open).
 Its inference code is MIT; its weights use the Stability AI Community License. The Studio installs the
 upstream inference package at a pinned revision in its own environment, with a dependency-only Windows
 Torch compatibility patch. **Google** made its **T5Gemma** text encoder, governed by the Gemma Terms of Use.
@@ -543,7 +544,9 @@ authors' work under its own licence; none of it is this pack's.
 - **NumPy**, **Pillow**, **PyAV**, **SciPy**, **soundfile**, **einops**, **safetensors**, **tokenizers** and
   **accelerate** (Hugging Face), **mlx-lm**, **mlx-whisper** and **mlx-audio** (ml-explore, Prince Canuma), **aiohttp**,
   **Pydantic**, **python-multipart**, **llguidance**, **sounddevice**, **miniaudio**, **Matplotlib**; and for
-  ComfyUI-MMAudio, **open_clip**, **timm**, **librosa**, **torchdiffeq** and **OmegaConf**.
+  ComfyUI-MMAudio, **open_clip**, **timm**, **librosa**, **torchdiffeq** and **OmegaConf**; and for Stable Audio 3
+  Small SFX's own environment on Windows, **einops-exts** (Phil Wang, MIT), **tqdm** (its developers, MPL-2.0 and
+  MIT) and **packaging** (the Python Packaging Authority, Apache-2.0 or BSD-2-Clause).
 - **Tim Dettmers** and the **bitsandbytes Foundation** contributors — **bitsandbytes** (MIT), the 8-bit optimizer the
   LoRA trainer uses.
 - **Bitstream** and the **DejaVu** authors — the **DejaVu** fonts (Bitstream Vera licence) the dailies reel's and
