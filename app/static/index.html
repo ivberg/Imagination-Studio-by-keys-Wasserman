@@ -298,7 +298,15 @@ const defaultImageModel = () => {
   const models = imageModels(), preferred = typeof prefs === "function" ? prefs().presets?.image_model || "qwen" : "qwen";
   return models.find(m => m.id === preferred && m.available)?.id || models.find(m => m.available)?.id || models[0].id;
 };
-const imageModel = () => C.imageModel || defaultImageModel();
+// Where the machine sends a catalogue of models with their checks (native Windows), the choice is explicit: a model
+// that is listed but not ready stays chosen so its reason shows, and one that is not listed is refused. Without a
+// catalogue (Mac, DGX Spark) only installed models are listed, and a saved choice this machine does not have (a preset
+// from another install, a model since removed) falls back to an offered one, as it did before the cards: it used to
+// block Make image, Make scouts and Last frame until the person picked again.
+const imageModel = () => {
+  const catalog = S.image_model_options?.length || S.windows_runtime?.image_models?.length;
+  return C.imageModel && (catalog || imageModels().some(m => m.id === C.imageModel)) ? C.imageModel : defaultImageModel();
+};
 const imageIsDraft = (id = imageModel()) => id === "sd-turbo";
 const imageCheckedRecipe = (id = imageModel()) => {
   const model = imageModels().find(m => m.id === id);

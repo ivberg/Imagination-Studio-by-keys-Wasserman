@@ -245,6 +245,19 @@ def model_helpers():
     return html[html.index("const IMAGE_LABELS"):html.index("const choice =")]
 
 
+def test_a_saved_model_this_machine_does_not_list_falls_back_to_an_offered_one():
+    out = run(model_helpers() + """
+      S.platform = "spark"; S.image_models = [{ id: "qwen", label: "Qwen 2.1 Turbo", note: "" }];
+      C.imageModel = "flux3k-full";  // a preset saved on another install
+      out.selected = imageModel(); out.why = imageModelWhy();
+      out.params = stillParams({ prompt: "a lighthouse", count: 1 });
+      S.image_models = [{ id: "moss-image" }]; C.imageModel = "qwen";  // the start value, on a machine without Qwen
+      out.only = imageModel();
+    """)
+    assert out["selected"] == "qwen" and not out["why"]
+    assert out["params"]["image_model"] == "qwen" and out["only"] == "moss-image"
+
+
 def test_model_selection_exposes_unavailable_options_without_silent_fallback():
     out = run(FIXTURE + model_helpers() + """
       S.image_models = [{ id: "sd-turbo" }];
