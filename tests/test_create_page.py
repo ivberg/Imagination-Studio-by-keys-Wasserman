@@ -398,6 +398,27 @@ def test_supported_picture_handoff_stays_a_first_frame_without_vsa_requests():
     assert out["calls"] == []
 
 
+@pytest.mark.parametrize("platform", ["mac", "spark"])
+def test_non_windows_create_ignores_stale_vsa_selection(platform):
+    out = create_run(f'S.platform={platform!r}; delete S.windows_vsa;\n' + """
+      C.videoBackend="vsa"; C.goes="video"; C.start="own"; C.image="first.png"; C.step=0;
+      out.active=isVsa(); out.controls=text(viewCreate());
+      out.video=text(viewVideo());
+      C.step=3; answers["/api/compose"]={prompt:"Ordinary H3 prompt."};
+      await button(viewCreate(),"Rebuild from steps").attrs.onclick();
+      C.step=4; answers["/api/jobs"]={id:"ordinary-h3"};
+      await button(viewCreate(),"Queue this clip").attrs.onclick();
+      out.request=calls.find(([path])=>path==="/api/jobs")[1];
+      out.vsaCalls=calls.filter(([path])=>path.includes("video-vsa"));
+      await useVideoPicture("scouts/next.png");
+      out.handoff=[C.videoBackend,C.start,C.image];
+    """)
+    assert not out["active"] and "Supported recipe controls" in out["controls"]
+    assert "Ref2VA VSA" not in out["video"]
+    assert out["request"]["kind"] == "video" and out["request"]["params"]["image"] == "first.png"
+    assert out["vsaCalls"] == [] and out["handoff"] == ["standard", "own", "scouts/next.png"]
+
+
 def test_library_picker_offers_stills_and_scouts_but_not_videos():
     out = create_run("""
       VSA.library=true;

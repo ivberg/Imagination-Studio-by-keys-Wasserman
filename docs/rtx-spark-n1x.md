@@ -75,6 +75,12 @@ Invoke-RestMethod http://127.0.0.1:7870/api/feature-checks/check -Method Post `
   -ContentType application/json -Body '{"feature":"video-vsa"}'
 ```
 
+VSA is native Windows only. Mac and DGX Spark keep their existing video backends, reference workflows
+and memory admission; they do not offer VSA controls. Cross-platform regression fixtures check the
+ordinary reference graphs and UI routing without inference, not hardware rendering. Before merging,
+manually check ordinary Create/reference and Production-to-Editor flows on those machines, alongside
+the Windows VSA workflow. A saved Windows VSA selection must not redirect an ordinary Mac/Spark clip.
+
 The first check uses the bundled baker picture, resized in that job to 512x288. It generates **864x480,
 22 frames at 24 fps (0.917 seconds), four Euler passes, sparsity 0.75**, with video/audio sigma shifts 12/3.
 Text, reference and audio tokens remain dense. Only generated-video attention is sparse.

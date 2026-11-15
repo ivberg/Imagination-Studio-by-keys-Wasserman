@@ -264,14 +264,61 @@ def test_supervised_command_parses_with_the_real_renderer_and_fixed_reference_po
     monkeypatch.setattr(generation, "render", capture_graph)
     with pytest.raises(RuntimeError, match="captured complete"):
         generation.reference(args)
-    assert graph["10"]["inputs"]["model"] == ["101", 0]
-    assert graph["11"]["inputs"]["model"] == ["101", 0]
+    assert graph["10"]["inputs"]["model"] == ["102", 0]
+    assert graph["11"]["inputs"]["model"] == ["102", 0]
+    assert graph["102"]["class_type"] == "StudioVSAAudit"
+    assert graph["102"]["inputs"]["model"] == ["101", 0]
+    assert graph["6"]["inputs"]["clip"] == ["102", 1]
     assert graph["100"]["class_type"] == "Ref2VAVSAGatePatch"
     assert graph["101"]["class_type"] == "MiniMaxH3SigmaShift"
     assert graph["17"]["class_type"] == "AudioAdjustVolume"
     assert graph["18"]["class_type"] == "SaveAudio"
     assert graph["6"]["inputs"]["ref_image_size"] == "match"
     assert vsa.COMFY_FLAGS == ("--use-ck-attention", "--vram-headroom", "3")
+
+
+@pytest.mark.parametrize("mac", [False, True], ids=["spark", "mac"])
+@pytest.mark.parametrize("mode", ["full", "turbo"])
+def test_ordinary_reference_workflow_keeps_dense_models_and_admission(tmp_path, monkeypatch, mac, mode):
+    import sys
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "spark"))
+    import spark_generate as generation
+
+    picture = tmp_path / "reference.png"
+    picture.write_bytes(b"synthetic reference; upload is mocked")
+    captured = []
+    monkeypatch.setattr(generation, "MAC", mac)
+    monkeypatch.setattr(generation, "mac_release", lambda: None)
+    monkeypatch.setattr(generation, "video", captured.append)
+    monkeypatch.setattr(sys, "argv", ["spark_generate.py", "video", "--prompt", "Use <Picture 1>.",
+                                    "--ref", str(picture), "--ref-mode", mode,
+                                    "--output", str(tmp_path / "clip.mp4")])
+    generation.main()
+    args = captured[0]
+    monkeypatch.setattr(vsa, "prepare_renderer", lambda *_: pytest.fail("Ordinary references must not enter Windows VSA"))
+    monkeypatch.setattr(generation, "up", lambda: False)
+    monkeypatch.setattr(generation, "side", lambda name: tmp_path / name)
+    monkeypatch.setattr(generation, "ensure_server", lambda *_: None)
+    monkeypatch.setattr(generation, "installed", lambda *_: True)
+    monkeypatch.setattr(generation, "upload", lambda *_: "reference.png")
+    monkeypatch.setattr(generation, "forget_uploads", lambda: None)
+    admissions = []
+    monkeypatch.setattr(generation, "fits_or_exit", lambda *a, **k: admissions.append((a, k)))
+    monkeypatch.delenv("SPARK_REF_CFG", raising=False)
+    graph = {}
+    def capture(workflow, sampler):
+        graph.update(workflow)
+        raise RuntimeError("captured ordinary workflow")
+    monkeypatch.setattr(generation, "render", capture)
+    with pytest.raises(RuntimeError, match="captured ordinary"):
+        generation.reference(args)
+    assert len(admissions) == 1 and admissions[0][1]["pictures"] == 1
+    assert graph["1"]["inputs"]["unet_name"] == generation.REF2VA["bf16" if mode == "turbo" else "int8"]
+    assert graph["9"]["inputs"]["sampler_name"] == ("euler" if mode == "turbo" else "res_multistep")
+    assert graph["10"]["inputs"]["steps"] == (4 if mode == "turbo" else 20)
+    assert graph["10"]["inputs"]["model"] == (["2", 0] if mode == "turbo" else ["1", 0])
+    assert graph["6"]["inputs"]["clip"] == ["3", 0]
+    assert not any(node["class_type"] in ("Ref2VAVSAGatePatch", "StudioVSAAudit") for node in graph.values())
 
 
 @pytest.mark.parametrize("experimental", [False, True])

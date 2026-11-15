@@ -400,7 +400,8 @@ def test_image_form_offers_and_queues_only_the_applicable_recipe(required):
     form = html[html.index("function viewCreate()"):html.index("/* ---------- Production")]
     choice = html[html.index("const choice ="):html.index("// A number of passes")]
     steps = html[html.index("const STEPS ="):html.index("const C_TEXT =")]
-    out = run(FIXTURE + model_helpers() + choice + steps + form + f"""
+    backend = html[html.index("const isVsa ="):html.index("function useVideoPicture(")]
+    out = run(FIXTURE + model_helpers() + choice + steps + backend + form + f"""
       const base = el; globalThis.el = (...args) => Object.assign(base(...args), {{ setAttribute() {{}} }});
       globalThis.clearButton = () => null; globalThis.clearAllCreate = () => {{}};
       globalThis.bind = (obj, key, node) => {{ node.value = obj[key]; return node; }};

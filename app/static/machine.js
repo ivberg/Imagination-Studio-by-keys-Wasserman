@@ -219,8 +219,9 @@ function wfcVsaChecks(card, active) {
       : "No successful single-clip length is recorded yet."),
     summary.render_diagnostics?.length ? el("div", { class: "note" }, "Prior renders with different provenance are excluded from this summary.") : null,
     sweep ? el("div", { class: "note" }, sweep.why || (sweep.state === "running"
-      ? `Automatic check in progress: ${sweep.active_frames} frames.`
-      : sweep.stop ? `Sweep ${sweep.state}: ${sweep.stop.frames} frames. ${sweep.stop.reason}` : `Sweep ${sweep.state}.`)) : null,
+      ? `Automatic check in progress: ${sweep.active_frames} frames. Started ${sweep.started_at}.`
+      : sweep.stop ? `Sweep ${sweep.state} at ${sweep.stop.seconds.toFixed(3)} s (${sweep.stop.frames} frames): ${sweep.stop.reason}. ${sweep.finished_at || sweep.started_at || ""}`
+        : `Sweep ${sweep.state} ${sweep.finished_at || ""}. ${summary.checked_count === summary.total_count ? "All 21 model-valid clip lengths have matching local evidence." : "Current matching evidence is shown above."}`)) : null,
     field("Recipe to check", el("select", { value: String(selected), disabled: active,
       onchange: e => { WFC.scopes[card.id] = e.target.value; wfcDraw(); } },
       lengths.map(row => el("option", { value: String(row.frames), selected: row.frames === selected },

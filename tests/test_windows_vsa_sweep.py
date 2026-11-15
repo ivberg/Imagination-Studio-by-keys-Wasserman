@@ -284,21 +284,17 @@ def test_supervisor_dispatches_only_an_explicit_compatible_sweep(sweep, monkeypa
 
 def test_page_sweep_action_summary_and_gaps_are_explicit():
     from test_shell_page import run
-    page = (Path(__file__).resolve().parents[1] / "app" / "static" / "index.html").read_text(encoding="utf-8")
-    chooser = page[page.index("function vsaLengths()"):page.index("function viewVsa()")]
-    out = run("globalThis.VSA = {frames: 22};\n" + chooser + """
-      globalThis.select = () => el("select"); globalThis.jobCard = () => el("div", {}, "job card");
-      S.windows_vsa = {installed:true, frames:22, seconds:22/24,
+    out = run("""
+      const card = {id:"video-vsa", installed:true, frames:22, seconds:22/24,
         qualification_summary: {longest_passed:{frames:73,seconds:73/24,checked_at:"original date"},
           checked_count:2,total_count:21,sweep:{state:"failed",started_at:"sweep date",
           stop:{frames:39,seconds:39/24,reason:"Host pressure"}}}};
-      const panel = vsaCheckPanel(); out.panel = text(panel);
+      const panel = wfcVsaChecks(card, false); out.panel = text(panel);
       await button(panel, "Qualify clip lengths automatically").attrs.onclick();
       out.body = calls.find(([path]) => path === "/api/feature-checks/check")[1];
-      S.windows_vsa.qualification_summary.sweep = {state:"done",finished_at:"finished date"};
-      out.gaps = text(vsaCheckPanel());
-      jobs = [{kind:"qualification",params:{feature:"video-vsa",sweep:true},status:"running"}];
-      out.disabled = button(vsaCheckPanel(), "Qualify clip lengths automatically").attrs.disabled;
+      card.qualification_summary.sweep = {state:"done",finished_at:"finished date"};
+      out.gaps = text(wfcVsaChecks(card, false));
+      out.disabled = button(wfcVsaChecks(card, true), "Qualify clip lengths automatically").attrs.disabled;
     """)
     assert out["body"] == {"feature": "video-vsa", "sweep": True} and out["disabled"]
     assert "3.042 s (73 frames)" in out["panel"] and "original date" in out["panel"]

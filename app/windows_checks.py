@@ -22,8 +22,8 @@ import windows_audio_checks as audio
 import windows_engine_checks as engines
 import windows_setup_fit
 import windows_library_checks as library
-<<<<<<< HEAD
 import windows_audio3
+import windows_video_vsa as vsa
 
 CHECKS = {
     windows_audio3.MODEL: FeatureCheck(windows_audio3.MODEL, windows_audio3.TITLE,
@@ -31,14 +31,9 @@ CHECKS = {
         (MemoryRequirement("host", windows_audio3.HOST_RESERVE_MB, "policy"),
          MemoryRequirement("device", windows_audio3.GPU_MB, "policy", windows_audio3.RESERVE_MB),
          MemoryRequirement("commit", windows_audio3.JOB_MB, "policy", windows_audio3.RESERVE_MB)), group="sound"),
-=======
-import windows_video_vsa as vsa
-
-CHECKS = {
     vsa.KIND: FeatureCheck(vsa.KIND, vsa.TITLE, vsa.SCOPE,
                           tuple(MemoryRequirement(pool, None, "unknown") for pool in ("host", "device", "commit")),
                           group="video"),
->>>>>>> 8defe36 (Windows: add experimental Ref2VA VSA video and guarded chaining. Can run video gen on 64GB!)
     **{kind: FeatureCheck(kind, library.TITLES[kind],
                          "Production Library workflow on pinned bundled media; only its tested input/settings are enabled.",
                          tuple(MemoryRequirement(pool, None, "unknown") for pool in ("host", "device", "commit")),
@@ -174,7 +169,6 @@ def parameters(params: dict) -> dict:
 def build(home, params, job_id):
     params = parameters(params)
     kind = params["feature"]
-<<<<<<< HEAD
     if kind == windows_audio3.MODEL:
         if why := windows_audio3.prerequisites():
             raise HTTPException(400, why)
@@ -182,7 +176,6 @@ def build(home, params, job_id):
         return [sys.executable, "-X", "utf8", str(features.PACK / "app" / "windows_audio3.py"),
                 "--qualify", "--job-id", job_id, "--output", str(home / "renders" / "calibration" / job_id),
                 "--report", str(target)], {}, [str(target)]
-=======
     if kind == vsa.KIND:
         if why := vsa.prerequisites():
             raise HTTPException(400, why)
@@ -195,7 +188,6 @@ def build(home, params, job_id):
                 "--qualify", "--frames", str(params.get("frames", vsa.FRAMES)),
                 "--job-id", job_id, "--output", str(output), "--report", str(target)], {}, [
                     str(target), str(output / "video.mp4")]
->>>>>>> 8defe36 (Windows: add experimental Ref2VA VSA video and guarded chaining. Can run video gen on 64GB!)
     if kind in library.KINDS:
         if why := library.prerequisites(kind):
             raise HTTPException(400, why)

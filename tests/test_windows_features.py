@@ -203,7 +203,7 @@ def test_progressive_status_and_report_never_run_a_test(check_ui, monkeypatch):
     assert [card["id"] for card in cards] == [
         audio.MODEL, "hlg", "finish", "foley", "scout", "sfx", "graphics",
         "qwen", "qwen-full", "flux3k-fast", "flux3k-full", "moss-image",
-        "turnaround", "upscale", "mask", "remove", "swap", "video",
+        "turnaround", "upscale", "mask", "remove", "swap", "video-vsa", "video",
         "video-long", "video-large", "video-sharp", "video-largest", "voice", "music"]  # the video levels, each a card
     by_id = {card["id"]: card for card in cards}
     assert all(not card["qualified"] and card["memory"]["minimum_installed_ram_mb"] is None for card in cards)
