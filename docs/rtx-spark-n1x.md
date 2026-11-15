@@ -23,7 +23,76 @@ install packages or build H3. The required filenames and folders are in [the VSA
 INT8 ConvRot Ref2VA, NVFP4/AWQ Qwen3VL-32B, FP16 video VAE, FP32 audio VAE, the Ref2VA four-step Turbo adapter
 and the FastH3 VSA gate. MiniMax H3's Community License and territory restrictions still apply.
 
-Restart the **real Studio**, then open **Video -> Ref2VA VSA**, or choose that backend in Create.
+**Machine -> Models & weights -> Video** lists **MiniMax H3 Ref2VA VSA** separately from ordinary H3.
+It checks all six recipe weight files in the configured model folders and links to the VSA Feature checks card.
+**Weights in place** is installation inventory only, not runtime readiness or a passed qualification.
+Missing weights are listed by filename; the node-only setup command does not download them.
+
+Restart the **real Studio**, then select **Video -> Video backend -> Ref2VA VSA**, or choose that backend in Create.
+On the Video landing, **Video backend** selects supported H3/FastH3 or Ref2VA VSA; the cards are workflows
+for that backend, not different backends. VSA's one-picture and scout handoffs keep their existing recipe.
+**Text only** and **Two pictures** are additional, initially unverified input recipes, bounded to
+864x480, 22 frames, four passes and pictures no larger than 512x288 each. They require their own local
+Feature checks even when ordinary qualification badges/gating are off; a one-picture pass never qualifies
+them. The checks verify output and supervised memory behavior, not prompt adherence or reference fidelity.
+The two-picture check uses the pinned baker fixture and a mirrored copy as a second reference.
+Run either explicitly through **Machine -> Feature checks -> Video -> Ref2VA VSA**, or the checks API
+(which queues the check alongside normal jobs):
+
+```text
+POST /api/feature-checks/check
+{"feature":"video-vsa","recipe":"text"}
+
+POST /api/feature-checks/check
+{"feature":"video-vsa","recipe":"two-pictures"}
+```
+
+After a matching pass, `video-vsa` jobs accept `recipe: "text"` without an image, or
+`recipe: "two-pictures"` with `image` and `extra_image` (named `<Picture 1>` and `<Picture 2>`).
+Omitting `recipe` preserves existing one-picture jobs. The new input recipes do not yet accept longer clips
+or sequences. Video/audio references, extra LoRAs and higher-resolution VSA remain outside this batch.
+**Sharp Spec** stays FastH3-specific, not a renamed VSA recipe. The VSA long-take card uses the existing
+up-to-60-second chain, not a single long generation or a claim of seamless continuity.
+
+On 2026-11-15 the first queued text-only 22-frame check (`1115-120117-a2cd92`) was refused by the
+memory watchdog: **Windows reports low physical memory**. The renderer selected the VSA reference graph
+with zero pictures and reached first-pass model initialization; no clip or passing receipt was produced.
+This does not establish a model/conditioning failure or a permanent capacity limit. The bounded live batch
+stopped there without retrying; two-picture generation and the scout/picture live follow-up were not run.
+Existing one-picture evidence was kept. Neither new input recipe is locally qualified by this attempt.
+
+After memory was freed, the explicitly requested text-only retry (`1115-121528-169ccd`) passed its
+22-frame technical qualification and saved an independent receipt. That is not evidence for longer
+text-only clips, reference fidelity or soundscape adherence. Qualification can continue for several
+minutes after a clip is rendered while all six model files are SHA-256 hashed. The check now logs media
+verification, cleanup, each model checksum and receipt saving separately; silence there is not a render
+performance measurement.
+
+The separately queued two-picture check (`1115-123940-84c599`) also passed its 22-frame technical
+qualification and saved its own receipt. Its two inputs were the baker fixture and a mirrored copy;
+this is not a test of identity separation between different people or broader multi-reference fidelity.
+Both new input recipes remain bounded to 864x480, 22 frames and four passes. No higher-memory recipe
+was tested in this batch.
+
+On review, the two-picture clip looked good to the viewer, showing the man in the bakery, but again
+contained unwanted foreign-language-like speech (language unverified). Its saved prompt was:
+
+```text
+The baker from <Picture 1> stands in the bakery shown in <Picture 2>. A locked, still camera. Mouth stays closed.
+overall_soundscape: Soft bakery room ambience.
+```
+
+The technical pass therefore does not establish closed-mouth or ambient-only adherence. This reproduces
+the earlier perceptual audio failure with two picture references; it does not identify the cause.
+
+The real Studio UI handoff smoke test used an existing scout and completed clip, without another model
+render. It found and fixed stale image-form state after returning to VSA and a Create banner that
+incorrectly checked ordinary H3 instead of the selected VSA recipe. Library **use** now opens the reference
+step; the explicit resize produced a ready 288x288 copy while preserving the original. **Add to the editor
+timeline** saved the completed 0.917 s clip in an isolated temporary project and the Editor displayed it.
+The temporary project was removed afterward; existing projects were not changed. This checks handoffs,
+not a newly rendered scout-to-video chain, Editor export or audio quality.
+
 Both backends use the same five Create steps: shot, picture/reference, words and sound, prompt review, then render.
 The shared take sheet shows VSA's own fixed recipe, length, seed and reference status, without supported H3's
 recipe shortcuts or estimates; its Roll button uses the same guarded VSA action as the Render step.

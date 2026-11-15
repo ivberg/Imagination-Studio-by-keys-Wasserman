@@ -162,10 +162,12 @@ const TABS = ["Home", "Apps", "Story", "Image", "Video", "Previs", "Sound", "Edi
 const C = { step: 0, mode: "scout", videoBackend: "standard", preset: "draft", quality: "standard", seconds: 5, seed: 1, scene: "", action: "", camera: "",
   dialogue: [], soundscape: "", music: "N/A", imagePrompt: "", image: null, scoutJob: null, prompt: "", job: null, count: 4, imageSize: "1344x768", imageJob: null, imageModel: "qwen", beats: "", cw: 864, ch: 480, steps: "", loras: [], textEncoder: "", lastImage: null, frames: null, retake: false, negations: [], negFor: null };
 const VSA = { image: "", reference: null, referenceBusy: false, referenceError: "", referenceRequest: 0, library: false,
-  frames: 22, mode: "single", sequenceSeconds: 60, job: null, checkState: "" };
+  frames: 22, mode: "single", sequenceSeconds: 60, job: null, checkState: "", recipe: "picture",
+  second: { image: "", reference: null, referenceBusy: false, referenceError: "", referenceRequest: 0, library: false } };
 const isVsa = () => C.goes === "video" && C.videoBackend === "vsa" && !!(S && S.windows_vsa);
 function useVideoPicture(path) {
   const vsa = C.videoBackend === "vsa" && S && S.windows_vsa;
+  if (vsa && VSA.recipe === "text") VSA.recipe = "picture";
   startCreate(vsa ? { goes: "video", videoBackend: "vsa" } : { goes: "video", start: "own", image: path }, 1);
   if (vsa) return vsaSelectImage(path);
 }
@@ -278,7 +280,7 @@ function lengthPicker(obj, after, long = {}) { const L = S.lengths, own = !!obj.
   return el("div", {}, pick, slide, el("div", { class: "note" }, said, " · the model takes 17n + 5 frames: " + L.shortest + " to " + most + " here, " + L.step + " apart")); }
 // the explicit controls decide the mode, the quality and the output preset the server understands
 function sync() {
-  if (isVsa()) return;
+  if (isVsa()) { C.mode = VSA.recipe === "text" ? "t2v" : "r2v"; return; }
   if (C.start === "refs" && !(S && S.ref2va)) C.start = "text";
   C.mode = C.goes === "image" ? "image" : C.goes === "edit" ? "edit" : { text: "t2v", scout: "scout", own: "i2v", refs: "r2v" }[C.start];
   if (isRef() && isLong()) C.seconds = 15;
@@ -727,6 +729,8 @@ function vsaLengths() {
 }
 function vsaLength() {
   const found = S && S.windows_vsa;
+  if (found && VSA.recipe !== "picture") return found.input_recipes?.find(row => row.id === VSA.recipe)
+    || { available: false, qualified: false, scope: "864x480, 22 frames, four passes", why: "Run this input recipe's feature check first." };
   return found && (vsaLengths().find(row => row.frames === Number(VSA.frames)) ||
     { ...found, available: false, qualified: false, why: "Reload Studio to obtain the selected length's check status." });
 }
@@ -748,13 +752,17 @@ function vsaControls() {
   const invalidDuration = sequence && (!Number.isInteger(seconds) || seconds < 1 || seconds > 60);
   return el("div", { class: "stack", "data-backend": "video-vsa" },
     el("h2", {}, "MiniMax H3 Ref2VA VSA"),
-    choice(VSA, "mode", { single: ["Single clip", "one model-length clip"],
-      sequence: ["Sequence up to 60 seconds", "short shots with potentially visible joins"] }, vsaModeChanged),
-    field(VSA.mode === "sequence" ? "Per-shot length" : "Single-clip length", select(VSA, "frames",
+    field("Input recipe", choice(VSA, "recipe", { picture: ["One picture", "existing measured recipe"],
+      text: ["Text only", "separate 22-frame qualification"], "two-pictures": ["Two pictures", "separate 22-frame qualification"] },
+      () => { if (VSA.recipe !== "picture") { VSA.frames = 22; VSA.mode = "single"; } render(); })),
+    VSA.recipe === "picture" ? choice(VSA, "mode", { single: ["Single clip", "one model-length clip"],
+      sequence: ["Sequence up to 60 seconds", "short shots with potentially visible joins"] }, vsaModeChanged)
+      : el("div", { class: "note" }, "This input recipe is currently bounded to a single 22-frame clip (0.917 s)."),
+    VSA.recipe === "picture" ? field(VSA.mode === "sequence" ? "Per-shot length" : "Single-clip length", select(VSA, "frames",
       Object.fromEntries(vsaLengths().map(row =>
-        [row.frames, `${row.frames} frames (${row.seconds.toFixed(3)} s)${S.windows_vsa.qualification_enabled === false ? "" : row.qualified ? " - separately checked" : " - no separate check, selectable"}`])), render)),
+        [row.frames, `${row.frames} frames (${row.seconds.toFixed(3)} s)${S.windows_vsa.qualification_enabled === false ? "" : row.qualified ? " - separately checked" : " - no separate check, selectable"}`])), render)) : null,
     el("div", { class: "note" }, found.scope),
-    !found.available ? el("div", { class: "tip" }, S.windows_vsa.why || found.why) : null,
+    !found.available ? el("div", { class: "tip" }, found.why || S.windows_vsa.why) : null,
     vsaCheckPanel(),
     sequence ? field("Sequence duration, whole seconds (1-60)", typed(bind(VSA, "sequenceSeconds",
       el("input", { type: "number", min: 1, max: 60, step: 1 })), render)) : null,
@@ -764,65 +772,69 @@ function vsaControls() {
       "Visible picture and sound joins are expected. This can take a long time; the sequence has a two-hour deadline. " +
       "A failure or cancellation stops the sequence; completed shots stay in its folder.") : null,
     field("Seed", bind(C, "seed", el("input", { type: "number", min: 0, max: 4294967295 }))),
-    el("div", { class: "note" }, "One reference picture is required in step 2; it is not a guaranteed first frame. Text-only generation, last frames, extra LoRAs, reference video/audio and supported H3's canvas/pass controls are outside this recipe. Their settings are kept separately and are not sent to VSA."),
+    el("div", { class: "note" }, "Each picture is a reference, not a guaranteed first frame. Last frames, extra LoRAs, reference video/audio and supported H3's canvas/pass controls remain outside these recipes. Their settings are kept separately and are not sent to VSA."),
     el("div", { class: "note" }, "This is a separate low-memory backend, not a replacement for the supported H3 engine. MiniMax H3 licence and territory restrictions apply."));
 }
-const vsaReferenceReady = () => !!(VSA.image && VSA.reference && VSA.reference.path === VSA.image &&
-  VSA.reference.ready && !VSA.referenceBusy && !VSA.referenceError);
-async function vsaSelectImage(path, resize = false) {
-  const request = ++VSA.referenceRequest;
-  VSA.image = path; VSA.reference = null; VSA.referenceBusy = true; VSA.referenceError = ""; render();
+const vsaPictureReady = ref => !!(ref.image && ref.reference && ref.reference.path === ref.image &&
+  ref.reference.ready && !ref.referenceBusy && !ref.referenceError);
+const vsaReferenceReady = () => VSA.recipe === "text" || vsaPictureReady(VSA) &&
+  (VSA.recipe !== "two-pictures" || vsaPictureReady(VSA.second));
+async function vsaSelectImage(path, resize = false, ref = VSA) {
+  const request = ++ref.referenceRequest;
+  ref.image = path; ref.reference = null; ref.referenceBusy = true; ref.referenceError = ""; render();
   try {
     const result = await api("/api/video-vsa/reference", { path, ...(resize ? { resize: true } : {}) });
     if (!result || typeof result.path !== "string" || !result.path || !Number.isInteger(result.width) || result.width <= 0 ||
       !Number.isInteger(result.height) || result.height <= 0 || result.ready !== (result.width <= 512 && result.height <= 288))
       throw new Error("The reference check returned invalid picture details.");
-    if (request === VSA.referenceRequest) { VSA.image = result.path; VSA.reference = result; }
+    if (request === ref.referenceRequest) { ref.image = result.path; ref.reference = result; }
   } catch (e) {
-    if (request === VSA.referenceRequest) { VSA.referenceError = e.message; toast(e.message); }
+    if (request === ref.referenceRequest) { ref.referenceError = e.message; toast(e.message); }
   } finally {
-    if (request === VSA.referenceRequest) { VSA.referenceBusy = false; render(); }
+    if (request === ref.referenceRequest) { ref.referenceBusy = false; render(); }
   }
 }
-function vsaReference() {
+function vsaReference(ref = VSA, ordinal = 1) {
+  if (VSA.recipe === "text") return el("div", { class: "note" }, "Text-only VSA uses no reference picture. Write the scene, action and sound in the following steps.");
   const upload = el("input", { type: "file", accept: "image/*", onchange: async () => {
     if (!upload.files[0]) return;
-    const request = ++VSA.referenceRequest;
-    VSA.reference = null; VSA.referenceBusy = true; VSA.referenceError = "";
+    const request = ++ref.referenceRequest;
+    ref.reference = null; ref.referenceBusy = true; ref.referenceError = "";
     const data = new FormData(); data.append("file", upload.files[0]);
     render();
     try { const response = await fetch("/api/upload", { method: "POST", body: data }), result = await response.json();
       if (!response.ok || !result.path) throw new Error(result.detail || result.error || "Picture upload failed.");
-      if (request !== VSA.referenceRequest) return;
-      await vsaSelectImage(result.path);
+      if (request !== ref.referenceRequest) return;
+      await vsaSelectImage(result.path, false, ref);
     } catch (e) {
-      if (request === VSA.referenceRequest) { VSA.referenceBusy = false; VSA.referenceError = e.message; toast(e.message); render(); }
+      if (request === ref.referenceRequest) { ref.referenceBusy = false; ref.referenceError = e.message; toast(e.message); render(); }
     }
   } });
-  const details = VSA.reference, box = el("div", { class: "stack" },
-    el("h2", {}, "Reference picture"),
-    el("div", { class: "note" }, "One picture, at most 512x288, named <Picture 1> in the prompt. It guides who or what appears, not the clip's first frame. A resize is an explicit CPU copy that keeps the aspect ratio, fits within 512x288 and leaves the original unchanged."),
+  const details = ref.reference, box = el("div", { class: "stack" },
+    el("h2", {}, "Reference picture " + ordinal),
+    el("div", { class: "note" }, `One picture, at most 512x288, named <Picture ${ordinal}> in the prompt. It guides who or what appears, not the clip's first frame. A resize is an explicit CPU copy that keeps the aspect ratio, fits within 512x288 and leaves the original unchanged.`),
     field("Upload a reference picture", upload),
-    el("div", { class: "row" }, el("button", { class: "fit", onclick: () => { VSA.library = !VSA.library; render(); } }, VSA.library ? "Hide the Library" : "Pick from the Library"),
+    el("div", { class: "row" }, el("button", { class: "fit", onclick: () => { ref.library = !ref.library; render(); } }, ref.library ? "Hide the Library" : "Pick from the Library"),
       el("button", { class: "fit", onclick: () => startCreate({ goes: "image", count: 6 }) }, "Make scouts in Image")),
-    VSA.image ? media(VSA.image) : null,
-    VSA.referenceBusy ? el("div", { class: "note", role: "status" }, "Checking or preparing the reference picture...") : null,
-    VSA.referenceError ? el("div", { class: "tip", role: "alert" }, VSA.referenceError) : null,
+    ref.image ? media(ref.image) : null,
+    ref.referenceBusy ? el("div", { class: "note", role: "status" }, "Checking or preparing the reference picture...") : null,
+    ref.referenceError ? el("div", { class: "tip", role: "alert" }, ref.referenceError) : null,
     details ? el("div", { class: details.ready ? "note" : "tip" }, details.ready ?
-      `${details.width}x${details.height}: ready as <Picture 1>.${details.resized ? " A resized copy is selected; the original is unchanged." : ""}` :
+      `${details.width}x${details.height}: ready as <Picture ${ordinal}>.${details.resized ? " A resized copy is selected; the original is unchanged." : ""}` :
       `${details.width}x${details.height} is larger than this recipe accepts. Create a resized reference copy to continue; the original is unchanged.`) : null,
-    VSA.image && !vsaReferenceReady() ? el("button", { class: "fit", disabled: VSA.referenceBusy,
-      onclick: () => vsaSelectImage(VSA.image, Boolean(details && !details.ready)) },
+    ref.image && !vsaPictureReady(ref) ? el("button", { class: "fit", disabled: ref.referenceBusy,
+      onclick: () => vsaSelectImage(ref.image, Boolean(details && !details.ready), ref) },
       details && !details.ready ? "Create resized reference copy" : "Check picture again") : null);
-  if (VSA.library) {
+  if (ref.library) {
     const grid = el("div", { class: "grid" }, el("div", { class: "note" }, "Loading Library pictures and scouts...")); box.append(grid);
     api("/api/library").then(list => {
       const pictures = list.filter(item => item.kind === "image");
-      grid.replaceChildren(...(pictures.length ? pictures.map(item => el("button", { type: "button", class: "tile" + (item.path === VSA.image ? " on" : ""),
-        onclick: () => { VSA.library = false; return vsaSelectImage(item.path); } }, media(item.path), el("span", { class: "cap" }, item.path.split("/").pop()))) :
+      grid.replaceChildren(...(pictures.length ? pictures.map(item => el("button", { type: "button", class: "tile" + (item.path === ref.image ? " on" : ""),
+        onclick: () => { ref.library = false; return vsaSelectImage(item.path, false, ref); } }, media(item.path), el("span", { class: "cap" }, item.path.split("/").pop()))) :
         [el("div", { class: "note" }, "No pictures or scouts in the Library yet.")]));
     }).catch(e => grid.replaceChildren(el("div", { class: "tip", role: "alert" }, e.message)));
   }
+  if (ref === VSA && VSA.recipe === "two-pictures") box.append(vsaReference(VSA.second, 2));
   return box;
 }
 function clipResultActions(path, soundtrack = false) {
@@ -841,14 +853,17 @@ function viewVsa() {
   return el("div", { class: "stack", "data-backend": "video-vsa" },
     el("h2", {}, "Render"),
     el("div", { class: "note" }, found.scope + " Seed " + C.seed + (sequence ? `; ${seconds}-second sequence.` : "")),
-    !found.available ? el("div", { class: "tip" }, S.windows_vsa.why || found.why) : null,
+    !found.available ? el("div", { class: "tip" }, found.why || S.windows_vsa.why) : null,
     !vsaReferenceReady() || !C.prompt.trim() ? el("div", { class: "tip" }, !vsaReferenceReady() ?
       "Choose and check a reference picture in step 2; an oversized picture needs an explicit resized copy." : "Open step 4 to build or write the prompt.") : null,
     invalidDuration ? el("div", { class: "tip" }, "Choose a whole number of seconds from 1 to 60 in step 1.") : null,
     negNote(),
     el("button", { class: "hot fit", disabled: !found.available || !vsaReferenceReady() || !C.prompt.trim() || invalidDuration, onclick: async () => {
       try { const job = await api("/api/jobs", { kind: "video-vsa", title: sequence ? "VSA sequence" : "Ref2VA VSA",
-        params: { image: VSA.image, prompt: C.prompt, seed: Number(C.seed), frames: Number(VSA.frames),
+        params: { ...(VSA.recipe === "text" ? {} : { image: VSA.image }),
+          ...(VSA.recipe !== "picture" ? { recipe: VSA.recipe } : {}),
+          ...(VSA.recipe === "two-pictures" ? { extra_image: VSA.second.image } : {}),
+          prompt: C.prompt, seed: Number(C.seed), frames: Number(VSA.frames),
           ...(sequence ? { sequence_seconds: seconds } : {}) } });
         VSA.job = job.id; await poll(); render();
       } catch (e) { toast(e.message); }
@@ -862,7 +877,7 @@ function viewVsa() {
 function viewCreate() {
   const body = el("div");
   sync();
-  const vsa = isVsa(), referenced = vsa || isRef();
+  const vsa = isVsa(), referenced = vsa ? VSA.recipe !== "text" : isRef();
   if (C.goes !== "image" && C.goes !== "edit" && S && S.windows_vsa) {
     const picker = choice(C, "videoBackend", { standard: ["Supported H3", "existing requirements and recipes"],
       vsa: ["Ref2VA VSA", "selectable lengths and live memory guards"] }, render);
@@ -1009,7 +1024,8 @@ function viewCreate() {
     const again = async () => { try {
       const request = vsa ? { fields: { scene: C.scene, action: C.action, camera: C.camera, dialogue: C.dialogue.map(line => ({ ...line, subject: 1 })),
           soundscape: C.soundscape, music: C.music }, first_frame: false, last_frame: false, frames: Number(VSA.frames),
-          seconds: Number(VSA.frames) / 24, references: 1, referenced: true, loras: [] } :
+          seconds: Number(VSA.frames) / 24, references: VSA.recipe === "text" ? 0 : VSA.recipe === "two-pictures" ? 2 : 1,
+          referenced: VSA.recipe !== "text", loras: [] } :
         { fields: { ...C, motion: isRef() ? motionFields() : null }, first_frame: !noFrame(), last_frame: !!lastOf(), ...lengthOf(C), references: isRef() ? Math.max(C.refs.length, refMedia() ? 0 : 1) : 0, referenced: isRef(), loras: isRef() ? lorasOf(C) : [] };
       const r = await api("/api/compose", request); C.prompt = r.prompt; area.value = r.prompt; negShow(warned);
     } catch (e) { toast(e.message); } };
@@ -1684,8 +1700,9 @@ function render() { const back = keepScroll(); renderShell(); renderHold(); if (
     Nodes: typeof viewNodes === "function" ? viewNodes : () => el("div", { class: "panel" }, el("h2", {}, "Nodes"), el("div", { class: "note m-flat" }, "The node canvas is not part of this install yet.")) }[tab]());
   const feature = { Voice: "voice", Music: "music", Foley: typeof SFX !== "undefined" ? SFX.mode : "foley",
     Finish: "finish", Graphics: "graphics", "Motion graphics": "graphics", "Motion Previs": "motion",
-    Create: C.mode === "image" ? null : C.mode === "edit" ? "edit" : "video" }[tab];
-  const guidance = typeof featureGuidance === "function" ? featureGuidance(feature) : null;
+    Create: isVsa() ? "video-vsa" : C.mode === "image" ? null : C.mode === "edit" ? "edit" : "video" }[tab];
+  const guidance = typeof featureGuidance === "function" ? featureGuidance(feature,
+    tab === "Create" && isVsa() ? { state: vsaLength() } : {}) : null;
   if (guidance) $("#view").prepend(guidance);
   coach(); bayUpdate();
   // a redraw (a job changed, a view finished loading) must not drop the outline a tutorial step just put on a control

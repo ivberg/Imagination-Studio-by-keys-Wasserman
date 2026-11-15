@@ -1297,6 +1297,19 @@ def windows_state() -> dict:
             rf"powershell -ExecutionPolicy Bypass -File scripts\setup-windows-cuda.ps1 -Parts {setup_part}", catalog_id=key)
         if key == "sound":
             items[-1]["optional"] = True
+    import windows_video_vsa
+    vsa_files = list(windows_video_vsa.model_files().values())
+    row("windows-video-vsa", windows_video_vsa.TITLE, "Video", root, vsa_files, "")
+    items[-1].update(
+        feature=windows_video_vsa.KIND,
+        installed_label="weights in place",
+        requirements_note="Separate Windows VSA recipe: one reference picture up to 512x288; "
+                          "864x480 output, four passes. Weights in place does not mean qualified. "
+                          "Feature checks verifies the pinned node, runtime and guarded recipe.",
+        download="Install the six recipe weights in the configured model folders listed in "
+                 "app/windows_video_vsa.py; see docs/rtx-spark-n1x.md. "
+                 "scripts\\setup-windows-vsa.ps1 installs only the pinned node, not weights.",
+        install={"how": "manual"})
     paths = windows_cuda.paths()
     for nid, label, engine, files, part in (
             ("windows-h3-engine", "TensorFold H3 native engine", "Video", [paths["tf_h3"]], "video"),

@@ -184,6 +184,8 @@ def test_completed_checks_refresh_capabilities_and_cached_feature_states():
 
 
 VSA_FIXTURE = FIXTURE + """
+globalThis.choice = (obj,key,options,after) => el("div",{},Object.entries(options).map(([value,[label]]) =>
+  el("button",{onclick:()=>{obj[key]=value;if(after)after();}},label)));
 Object.assign(card, { id: "video-vsa", title: "Ref2VA VSA", group: "video",
   open_tab: "Create", open_label: "Open VSA", open_video_backend: "vsa",
   lengths: Array.from({length:21},(_,i) => {const frames=22+17*i;
@@ -251,14 +253,69 @@ def test_video_landing_does_not_apply_ordinary_h3_policy_to_vsa():
     out = run(VSA_FIXTURE + """
       card.available=true; card.qualified=true;
       S.capabilities.video={available:false,installed:true,why:"H3 pool policy refuses"};
+      C.videoBackend="standard";
+      const standard=viewVideo();
+      out.standard=button(standard,"A clip with sound").attrs.disabled;
+      button(standard,"Ref2VA VSA").attrs.onclick();
       const page=viewVideo();
-      const vsa=button(page,"Ref2VA VSA");
-      out.enabled=!vsa.attrs.disabled;
-      out.standard=button(page,"A clip with sound").attrs.disabled;
+      out.enabled=!button(page,"From your picture").attrs.disabled;
       out.badge=!!find(page,node=>node.attrs?.["data-feature-card"]==="video-vsa");
+      out.primaryUnqualified=text(find(page,node=>node.attrs?.class==="acts")).includes("Not qualified");
       out.reason=capWhy("video-vsa");
     """)
-    assert out == {"enabled": True, "standard": True, "badge": True, "reason": ""}
+    assert out == {"enabled": True, "standard": True, "badge": True, "primaryUnqualified": True, "reason": ""}
+
+
+def test_vsa_landing_uses_input_specific_checks_and_preserves_standard_backend():
+    out = run(VSA_FIXTURE + """
+      card.available=true; card.qualified=true;
+      globalThis.VSA={recipe:"picture",mode:"single",frames:124};
+      globalThis.startCreate=(set,step=0)=>{Object.assign(C,set);C.step=step;};
+      S.windows_vsa.input_recipes=[
+        {id:"text",installed:true,available:true,qualified:true},
+        {id:"two-pictures",installed:true,available:false,qualified:false,why:"Two-picture check required"}];
+      C.videoBackend="vsa";
+      const page=viewVideo();
+      out.textEnabled=!button(page,"A clip with sound").attrs.disabled;
+      out.refsDisabled=button(page,"References").attrs.disabled;
+      out.sharpDisabled=button(page,"Sharp Spec").attrs.disabled;
+      out.perShot=!!button(page,"Per-shot qualified");
+      out.sharpQualified=text(find(page,node=>node.attrs?.["data-feature-card"]==="video-vsa" &&
+        text(node).includes("Sharp Spec"))).includes("Qualified");
+      await button(page,"A clip with sound").attrs.onclick();
+      out.textRecipe=[VSA.recipe,VSA.frames,C.videoBackend];
+      await button(page,"A long take").attrs.onclick();
+      out.sequence=[VSA.recipe,VSA.mode];
+      await button(page,"Supported H3 / FastH3").attrs.onclick();
+      out.standard=!text(viewVideo()).includes("Two-picture check required");
+    """)
+    assert out["textEnabled"] and out["refsDisabled"] and out["sharpDisabled"]
+    assert out["perShot"] and not out["sharpQualified"]
+    assert out["textRecipe"] == ["text", 22, "vsa"]
+    assert out["sequence"] == ["picture", "sequence"] and out["standard"]
+
+
+def test_video_landing_can_render_while_initial_state_is_loading():
+    out = run("""
+      S=null;
+      out.page=text(viewVideo());
+    """)
+    assert "A clip with sound" in out["page"] and "Ref2VA VSA" not in out["page"]
+
+
+def test_create_guidance_uses_selected_vsa_recipe_instead_of_ordinary_h3():
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    guidance = html[html.index("  const feature = { Voice:"):html.index('  if (guidance) $("#view")')]
+    out = run(VSA_FIXTURE + """
+      tab="Create"; C.mode="r2v";
+      globalThis.isVsa=()=>true;
+      globalThis.vsaLength=()=>({installed:true,qualified:true,available:true});
+      S.capabilities.video={installed:false,available:false,why:"Ordinary H3 is missing"};
+    """ + guidance + """
+      out.text=text(guidance);out.feature=feature;
+    """)
+    assert out["feature"] == "video-vsa"
+    assert "Qualified" in out["text"] and "Ordinary H3 is missing" not in out["text"]
 
 
 def test_models_inventory_explains_installation_fit_and_links_independent_checks():

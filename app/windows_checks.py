@@ -103,7 +103,8 @@ def timeout_seconds(job: dict) -> int:
 def save_outcome(job: dict) -> None:
     kind = job["params"]["feature"]
     if kind == vsa.KIND:
-        kind = vsa.SWEEP_KIND if job["params"].get("sweep") else vsa.evidence_kind(job["params"].get("frames", vsa.FRAMES))
+        kind = vsa.SWEEP_KIND if job["params"].get("sweep") else vsa.evidence_kind(
+            job["params"].get("frames", vsa.FRAMES), job["params"].get("recipe", "picture"))
     previous = features.saved(kind, "-attempt")
     same_job = previous.get("job_id") == job["id"]
     saved = previous if same_job else {}
@@ -144,11 +145,14 @@ def parameters(params: dict) -> dict:
                     raise ValueError("An automatic VSA sweep accepts only feature and sweep: true; lengths are chosen automatically.")
                 return {"feature": vsa.KIND, "sweep": True}
             frames = vsa.calibration_frames(params.get("frames", vsa.FRAMES))
-            if set(params) - {"feature", "frames"}:
-                raise ValueError("VSA calibration accepts only feature and frames; its canvas and recipe stay fixed.")
+            recipe = vsa.recipe_name(params.get("recipe", "picture"))
+            vsa.evidence_kind(frames, recipe)
+            if set(params) - {"feature", "frames", "recipe"}:
+                raise ValueError("VSA calibration accepts only feature, frames and a registered input recipe.")
         except ValueError as error:
             raise HTTPException(400, str(error)) from None
-        return {"feature": vsa.KIND} | ({"frames": frames} if frames != vsa.FRAMES else {})
+        return {"feature": vsa.KIND} | ({"frames": frames} if frames != vsa.FRAMES else {}) | (
+            {"recipe": recipe} if recipe != "picture" else {})
     if params["feature"] in images.KINDS:
         if set(params) - {"feature", "scope", "group"} or "scope" in params and "group" in params:
             raise HTTPException(400, "Choose a registered image qualification level.")
@@ -186,6 +190,7 @@ def build(home, params, job_id):
                     "--sweep", "--job-id", job_id, "--output", str(output), "--report", str(target)], {}, [str(target)]
         return [sys.executable, "-X", "utf8", str(features.PACK / "scripts" / "windows-vsa-check.py"),
                 "--qualify", "--frames", str(params.get("frames", vsa.FRAMES)),
+                "--recipe", params.get("recipe", "picture"),
                 "--job-id", job_id, "--output", str(output), "--report", str(target)], {}, [
                     str(target), str(output / "video.mp4")]
     if kind in library.KINDS:

@@ -27,17 +27,18 @@ function featureBadge(kind, options = {}) {
   const c = options.state || (kind === "video-vsa" ? S?.windows_vsa : S?.capabilities?.[kind]);
   const checks = S && S.feature_checks;
   if (!checks || !checks.supported || checks.mode?.enabled === false || !checks.features?.[kind] || !c) return null;
-  const ready = c.qualified ?? c.available, label = ready ? "Qualified" : c.installed === false && kind !== "foley" ? "Setup required" : options.unqualified || "Not qualified";
+  const ready = c.qualified ?? c.available, label = ready ? options.qualifiedLabel || "Qualified" : c.installed === false && kind !== "foley" ? "Setup required" : options.unqualified || "Not qualified";
   return el("button", { type: "button", class: "tag2 feature-link fit " + (ready ? "ok" : "warn"),
     "aria-label": label + ": " + checks.features[kind],
     title: ready ? "View saved qualification evidence and limits." : "Open this feature's checks and setup",
     onclick: () => openFeatureCheck(kind) }, label, ready ? "" : " →");
 }
-function featureGuidance(kind) {
+function featureGuidance(kind, options = {}) {
   if (!kind || !S?.feature_checks?.supported || !S.feature_checks.features?.[kind]) return null;
-  const why = typeof capWhy === "function" ? capWhy(kind) : "";
+  const why = options.state ? options.state.available ? "" : options.state.why
+    : typeof capWhy === "function" ? capWhy(kind) : "";
   return el("div", { class: "stack", "data-feature-guidance": kind },
-    el("div", { class: "row" }, featureBadge(kind),
+    el("div", { class: "row" }, featureBadge(kind, options),
       el("button", { class: "small", onclick: () => openFeatureCheck(kind) }, "Feature checks")),
     why ? el("div", { class: "note" }, why) : null);
 }
@@ -212,6 +213,10 @@ function wfcVsaChecks(card, active) {
   const lengths = card.lengths || [], summary = card.qualification_summary || {}, sweep = summary.sweep;
   const longest = summary.longest_passed, selected = Number(WFC.scopes[card.id] || 22);
   return el("div", { class: "stack", "data-vsa-checks": true },
+    ...(card.input_recipes || []).filter(row => row.id !== "picture").map(row => el("div", { class: "row" },
+      el("span", { class: "note" }, row.title + " / 22 frames: " + (row.qualified ? "separately qualified" : row.why || "not checked")),
+      el("button", { class: "small", disabled: !row.installed || active,
+        onclick: () => wfcCheck(card, { recipe: row.id }) }, "Check " + row.title.toLowerCase()))),
     el("div", { class: "note" }, "Technical qualification checks rendering, media output and memory safety, not audio instruction adherence. Baker tests still produced unwanted speech; an empty bakery had energetic ambience with no voices."),
     el("div", { class: "note" }, "The basic 22-frame pass enables every model-valid length; separate length checks are evidence, not a length cap. Ordinary H3 is unchanged."),
     el("div", { class: "note" }, longest

@@ -12,15 +12,17 @@ function artSlot(name, cls = "", sign = "image") { const box = el("div", { class
   if (ART.ready.has(name)) box.append(el("img", { src: "art/" + name + ".webp", alt: "", loading: "lazy", decoding: "async" }));
   return box; }
 // a picture card: the picture, one label, one line, a chevron
-function withFeatureBadge(card, feature, attrs = {}) {
-  const badge = feature && typeof featureBadge === "function" ? featureBadge(feature) : null;
+function withFeatureBadge(card, feature, attrs = {}, capability) {
+  const badge = feature && typeof featureBadge === "function" ? featureBadge(feature, capability ? {
+    state: capability, qualifiedLabel: capability.qualification_label
+  } : {}) : null;
   return badge ? el("div", { class: "feature-app", "data-feature-card": feature, ...attrs }, card, badge) : card;
 }
-function pcard({ art, sign, title, one, run, k, off, src, data, feature }) {  // data: the card's data-* attributes
+function pcard({ art, sign, title, one, run, k, off, src, data, feature, capability }) {  // data: the card's data-* attributes
   const pic = src ? el("div", { class: "art" }, el("img", { src, alt: "", loading: "lazy" })) : artSlot(art, "", sign);
   const card = el("button", { class: "pcard", type: "button", onclick: run, disabled: !!off, title: off || one || "", ...(data || {}) }, pic, k ? el("span", { class: "k" }, k) : null,
     el("div", { class: "txt" }, el("div", {}, el("b", {}, title), one ? el("span", { class: "one" }, off || one) : null), icon("go", "go")));
-  return withFeatureBadge(card, feature); }
+  return withFeatureBadge(card, feature, {}, capability); }
 // a vault page's head with its cover, like an engine's; without a ready cover it is the plain head
 function vaultHead(id, title, line, right) {
   if (!ART.ready.has("vault-" + id)) return pageHead("Studio Vault", title, line, right);
@@ -53,8 +55,6 @@ const ENGINE_PAGES = {
       { art: "act-video-own", sign: "video", title: "From your picture", one: "Your own first frame", run: () => startCreate({ goes: "video", start: "own" }, 1) },
       { art: "act-video-refs", sign: "video", title: "References", one: "Keep a face, a motion or a voice", run: () => startCreate({ goes: "video", start: "refs" }, 1),
         off: S && S.ref2va ? "" : "Needs Ref2VA: oneshot-setup.sh --ref2va" },
-      S && S.windows_vsa ? { art: "act-video-refs", sign: "video", title: "Ref2VA VSA",
-        one: "Separate low-memory backend; selectable clip lengths and live memory guards", feature: "video-vsa", run: () => startCreate({ goes: "video", videoBackend: "vsa" }) } : null,
       { art: "start-long", sign: "video", title: "A long take", one: "Chained clips, 30 seconds and up", run: () => { const k = longFirst(); startCreate({ goes: "video", start: "text", ...(k ? { seconds: k } : {}) }); } },
       S && S.sharp ? { art: "start-sharp", sign: "video", title: "Sharp Spec", one: "Sam's locked recipe: 1376 × 768, 8 passes", run: () => { if (typeof sharpCreate === "function") sharpCreate(); go("Create"); } } : null].filter(Boolean) }),
   previs: () => ({ line: "Motion taken from a clip, and sets your own agent builds in Blender or Blockout.", marks: [mark("claude"), mark("codex")],
@@ -74,29 +74,57 @@ const ENGINE_PAGES = {
       { art: "act-edit-library", sign: "library", title: "Library", one: "Every take on this machine", run: () => go("Library") }] }),
 };
 function engineLanding(id) { const r = ROOMS.find(x => x.id === id), e = ENGINE_PAGES[id]();
+  const vsa = id === "video" && S && S.windows_vsa && C.videoBackend === "vsa";
+  if (vsa) {
+    const state = recipe => recipe === "picture" ? S.windows_vsa
+      : S.windows_vsa.input_recipes?.find(row => row.id === recipe) || { installed: true, qualified: false, available: false, why: "Run this input recipe's feature check first." };
+    const open = (recipe, sequence = false, step = 0) => {
+      VSA.recipe = recipe; VSA.mode = sequence ? "sequence" : "single";
+      if (recipe !== "picture") VSA.frames = 22;
+      startCreate({ goes: "video", videoBackend: "vsa" }, step);
+    };
+    e.line = "Ref2VA VSA backend: text or small picture references at 864 × 480. New input recipes require separate local checks.";
+    e.primary = ["Roll a new clip", () => open("text")];
+    e.cards = [
+      { art: "start-clip", title: "A clip with sound", one: "Text-only VSA; 22 frames with its own qualification", recipe: "text", run: () => open("text") },
+      { art: "start-scout", title: "Scout, then animate", one: "Make scouts, then use a chosen picture as a reference", recipe: "picture", run: () => { VSA.recipe = "picture"; startCreate({ goes: "image", count: 6, videoBackend: "vsa" }); } },
+      { art: "act-video-own", title: "From your picture", one: "One picture reference, not an exact first-frame anchor", recipe: "picture", run: () => open("picture", false, 1) },
+      { art: "act-video-refs", title: "References", one: "Two small picture references; video/audio references are not implemented", recipe: "two-pictures", run: () => open("two-pictures", false, 1) },
+      { art: "start-long", title: "A long take", one: "Chained picture-reference shots, up to 60 seconds; visible joins possible", recipe: "picture", run: () => open("picture", true) },
+      { art: "start-sharp", title: "Sharp Spec", one: "FastH3-specific recipe; not implemented for Ref2VA VSA", recipe: "picture", off: "Sharp Spec requires FastH3; a higher-resolution VSA recipe is not qualified.", run: () => {} }
+    ].map(card => ({ ...card, sign: "video", feature: "video-vsa",
+      capability: card.off ? { ...state(card.recipe), available: false, qualified: false, why: card.off }
+        : { ...state(card.recipe), qualification_label: card.art === "start-long" ? "Per-shot qualified"
+          : card.art === "start-scout" ? "Video qualified" : undefined } }));
+  }
   if (id === "sound" && S && S.platform === "windows") {
     e.line = "Stable Audio 3 Small SFX is the default; Stable Audio Open is optional. MMAudio makes foley. Each backend has its own recipe, installation and verification requirements.";
     const effect = () => { SFX.mode = "sfx"; go("Foley"); };
     e.marks = []; e.primary = ["Make a sound effect", effect]; e.cards[2].one = "Sound effects from words; limits follow the selected backend"; e.cards[2].run = effect;
   }
-  const imageKind = typeof imageFeature === "function" ? imageFeature() : "scout";
-  const primary = { image: imageKind, video: "video", sound: "voice" }[id];
-  const why = id === "image" && typeof imageModelWhy === "function" ? imageModelWhy() : capWhy(primary);
+  const imageKind = id === "image" && S && typeof imageFeature === "function" ? imageFeature() : "scout";
+  const primary = vsa ? "video-vsa" : { image: imageKind, video: "video", sound: "voice" }[id];
+  const why = vsa ? (e.cards[0].capability.available ? "" : e.cards[0].capability.why)
+    : id === "image" && typeof imageModelWhy === "function" ? imageModelWhy() : capWhy(primary);
   const kinds = { "act-image-edit": "edit", "act-image-looks": "looks", "act-previs-motion": "motion",
     "start-voice": "voice", "start-song": "music", "start-sfx": "sfx" };
   e.cards = e.cards.map((card, index) => {
     const feature = card.feature || (id === "video" ? "video" : id === "image" && index < 2 ? imageKind : kinds[card.art]);
-    const unavailable = id === "image" && index < 2 && typeof imageModelWhy === "function" ? imageModelWhy() : capWhy(feature);
-    return { ...card, feature, off: unavailable || card.off };
+    const unavailable = card.capability ? (card.capability.available ? "" : card.capability.why)
+      : id === "image" && index < 2 && typeof imageModelWhy === "function" ? imageModelWhy() : capWhy(feature);
+    return { ...card, feature, off: card.off || unavailable };
   });
-  if (S.platform === "windows" && id === "image") e.line = imageModelName() + ": installation, supported recipes and memory requirements are in Feature checks.";
-  if (S.platform === "windows" && id === "video" && why) e.line = why;
+  if (S?.platform === "windows" && id === "image") e.line = imageModelName() + ": installation, supported recipes and memory requirements are in Feature checks.";
+  if (!vsa && S?.platform === "windows" && id === "video" && why) e.line = why;
   return el("div", {},
     el("div", { class: "enghead" }, artSlot("engine-" + id, "", id),
       el("div", { class: "stack" }, el("span", { class: "eyebrow engmark" }, el("img", { src: "brand/module-" + id + ".svg", alt: "", width: 22, height: 22 }), "Creative Engine"), el("h1", { class: "display" }, r.name), el("p", { class: "sub", style: "margin:0" }, e.line),
         e.marks.filter(Boolean).length ? el("div", { class: "marks" }, e.marks) : null,
         el("div", { class: "acts" }, el("button", { class: "primary", disabled: !!why, title: why, onclick: e.primary[1] }, e.primary[0]),
-          typeof featureGuidance === "function" ? featureGuidance(primary) : null))),
+          typeof featureGuidance === "function" ? featureGuidance(primary, vsa ? { state: e.cards[0].capability } : {}) : null))),
+    id === "video" && S && S.windows_vsa ? field("Video backend", choice(C, "videoBackend", {
+      standard: ["Supported H3 / FastH3", "existing recipes"], vsa: ["Ref2VA VSA", "separate input recipe checks"]
+    }, render)) : null,
     el("div", { class: "cards" + (e.cards.length >= 4 ? " c4" : e.cards.length === 3 ? " c3" : "") }, e.cards.map(pcard))); }
 const viewStory = () => engineLanding("story"), viewImage = () => engineLanding("image"), viewVideo = () => engineLanding("video"),
   viewPrevis = () => engineLanding("previs"), viewSound = () => engineLanding("sound"), viewEditHub = () => engineLanding("edit");

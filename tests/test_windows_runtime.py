@@ -249,6 +249,9 @@ def test_native_discovery_uses_runtime_image_inventory_and_powershell(install, m
     assert "Qwen-Image-2.1-Comfy" in rows["qwen"]["expected"]
     assert rows["qwen-full"]["state"] == "missing"
     for row in rows.values():
+        if row["id"] == "windows-video-vsa":
+            assert row["install"]["how"] == "manual"
+            continue
         assert row["install"]["how"] == "command"
         assert row["install"]["shown"].startswith("powershell ")
         assert "bash " not in row["install"]["shown"] and ".sh " not in row["install"]["shown"]
@@ -261,6 +264,36 @@ def test_native_discovery_uses_runtime_image_inventory_and_powershell(install, m
     path.unlink()
     rows = {row["id"]: row for row in discover.state()["needs"]}
     assert rows["qwen"]["state"] == "missing" and path.name in rows["qwen"]["why"]
+
+
+def test_native_discovery_lists_vsa_weights_without_requiring_ordinary_h3(install, monkeypatch):
+    import discover
+    import windows_video_vsa as vsa
+
+    monkeypatch.setattr(vsa, "status", lambda *args: pytest.fail("Inventory must not run qualification"))
+    monkeypatch.setattr(vsa, "prerequisites", lambda: pytest.fail("Weights are separate from runtime readiness"))
+    files = list(vsa.model_files().values())
+    for path in files:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"test")
+    rows = {row["id"]: row for row in discover.windows_state()["needs"]}
+    row = rows["windows-video-vsa"]
+    assert row["label"] == vsa.TITLE and row["engine"] == "Video"
+    assert row["state"] == "expected" and row["installed_label"] == "weights in place"
+    assert row["feature"] == "video-vsa" and row["optional"] is False
+    assert row["expected"] == discover.shown(runtime.model_root())
+    assert rows["windows-h3-engine"]["state"] == "missing"
+    assert "does not mean qualified" in row["requirements_note"]
+    assert "not weights" in row["download"] and row["install"]["how"] == "manual"
+    assert "uninstall" not in row and "runtime_fit" not in row
+    for path in files:
+        path.write_bytes(b"")
+        row = next(row for row in discover.windows_state()["needs"] if row["id"] == "windows-video-vsa")
+        assert row["state"] == "missing" and path.name in row["why"]
+        path.write_bytes(b"test")
+    files[0].unlink()
+    row = next(row for row in discover.windows_state()["needs"] if row["id"] == "windows-video-vsa")
+    assert row["state"] == "missing" and files[0].name in row["why"]
 
 
 def test_native_discovery_never_starts_posix_scan_or_installer(client, install, monkeypatch):

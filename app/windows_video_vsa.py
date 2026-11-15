@@ -46,6 +46,7 @@ AUDIO_VAE = "minimax_h3_audio_vae_fp32.safetensors"
 TRANSFORMER = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
 TURBO = "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
 GATE = "fasth3_vsa_gate.safetensors"
+RECIPES = {"picture": "One picture", "text": "Text only", "two-pictures": "Two pictures"}
 SCOPE = "One reference picture up to 512x288; 864x480, 22 frames / 24 fps (0.917 s), four passes, VSA sparsity 0.75."
 PROMPT = ("The baker in <Picture 1> stands at the counter and smiles gently. A locked, still camera. "
           "Mouth stays closed.\noverall_soundscape: Soft bakery room ambience.")
@@ -87,10 +88,18 @@ def prerequisites() -> str:
 
 
 def parameters(params: dict) -> dict:
-    if not isinstance(params, dict) or set(params) - {"image", "prompt", "seed", "frames", "sequence_seconds"}:
-        raise ValueError("VSA accepts only image, prompt, seed, frames and optional sequence_seconds.")
-    if not isinstance(params.get("image"), str) or not params["image"].strip():
+    if not isinstance(params, dict) or set(params) - {"image", "extra_image", "recipe", "prompt", "seed", "frames", "sequence_seconds"}:
+        raise ValueError("VSA accepts only recipe, image, extra_image, prompt, seed, frames and optional sequence_seconds.")
+    recipe = recipe_name(params.get("recipe", "picture"))
+    if recipe != "text" and (not isinstance(params.get("image"), str) or not params["image"].strip()):
         raise ValueError("Choose one reference picture inside Studio.")
+    if recipe == "text" and ("image" in params or "extra_image" in params):
+        raise ValueError("Text-only VSA does not accept reference pictures.")
+    if recipe == "two-pictures":
+        if not isinstance(params.get("extra_image"), str) or not params["extra_image"].strip():
+            raise ValueError("Choose a second reference picture inside Studio.")
+    elif "extra_image" in params:
+        raise ValueError("A second picture needs the two-picture VSA recipe.")
     prompt = params.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 20000:
         raise ValueError("Write a nonempty prompt of at most 20000 characters; the picture is <Picture 1>.")
@@ -98,8 +107,19 @@ def parameters(params: dict) -> dict:
     if type(seed) is not int or not 0 <= seed <= 2 ** 32 - 1:
         raise ValueError("Seed must be an integer from 0 to 4294967295.")
     frames = calibration_frames(params.get("frames", FRAMES))
+    if recipe != "picture" and (frames != FRAMES or "sequence_seconds" in params):
+        raise ValueError("New VSA input recipes currently accept only a single 22-frame clip.")
     sequence = {"sequence_seconds": sequence_seconds(params["sequence_seconds"])} if "sequence_seconds" in params else {}
-    return {"image": params["image"], "prompt": prompt, "seed": seed} | ({"frames": frames} if frames != FRAMES else {}) | sequence
+    inputs = {} if recipe == "text" else {"image": params["image"]}
+    if recipe == "two-pictures":
+        inputs["extra_image"] = params["extra_image"]
+    return inputs | {"prompt": prompt, "seed": seed} | ({"recipe": recipe} if recipe != "picture" else {}) | ({"frames": frames} if frames != FRAMES else {}) | sequence
+
+
+def recipe_name(recipe: str) -> str:
+    if not isinstance(recipe, str) or recipe not in RECIPES:
+        raise ValueError("Choose a registered VSA input recipe.")
+    return recipe
 
 
 def require_image(path: Path) -> None:
@@ -118,7 +138,12 @@ def calibration_frames(frames: int) -> int:
     return frames
 
 
-def evidence_kind(frames: int) -> str:
+def evidence_kind(frames: int, recipe: str = "picture") -> str:
+    recipe = recipe_name(recipe)
+    if recipe != "picture":
+        if calibration_frames(frames) != FRAMES:
+            raise ValueError("New VSA input recipes are bounded to 22 frames.")
+        return f"{KIND}-{recipe}"
     return KIND if calibration_frames(frames) == FRAMES else f"{KIND}-{frames}"
 
 
@@ -132,14 +157,15 @@ def sequence_count(frames: int, seconds: int) -> int:
     return math.ceil(sequence_seconds(seconds) * 24 / calibration_frames(frames))
 
 
-def fingerprint(frames: int = FRAMES) -> dict:
+def fingerprint(frames: int = FRAMES, recipe: str = "picture") -> dict:
     frames = calibration_frames(frames)
+    evidence_kind(frames, recipe)
     files = {name: {"size": path.stat().st_size, "mtime_ns": path.stat().st_mtime_ns}
              for name, path in model_files().items()}
     return {"contract": CONTRACT, "kind": KIND,
             "recipe": {"width": WIDTH, "height": HEIGHT, "frames": frames, "steps": 4, "sparsity": .75,
                        "reference_width": 512, "reference_height": 288, "cold": True,
-                       "comfy_flags": list(COMFY_FLAGS)},
+                       "comfy_flags": list(COMFY_FLAGS), **({"input_recipe": recipe} if recipe != "picture" else {})},
             "models": files, "node": NODE_COMMIT,
             "model_root": hashlib.sha256(str(windows_runtime.model_root().resolve()).encode()).hexdigest(),
             "hardware": {**hardware_profile(), "device": hashlib.sha256(native.device_uuid().encode()).hexdigest()},
@@ -169,20 +195,24 @@ def measured_profile(receipt: dict):
                    initial["gpu_dedicated_total_mb"])
 
 
-def status(frames: int = FRAMES) -> dict:
+def status(frames: int = FRAMES, recipe: str = "picture") -> dict:
     frames = calibration_frames(frames)
+    kind = evidence_kind(frames, recipe)
     base = {"installed": False, "available": False, "qualified": False, "state": "not_installed",
             "experimental": False, "frames": frames, "seconds": seconds_of(frames),
             "scope": SCOPE.replace("22 frames", f"{frames} frames").replace("0.917 s", f"{frames / 24:.3f} s"),
             "check_available": True}
+    if recipe != "picture":
+        base.update(experimental=True, scope=f"{RECIPES[recipe]}; 864x480, 22 frames / 24 fps (0.917 s), four passes.",
+                    recipe=recipe)
     try:
         if why := prerequisites():
             return {**base, "why": why}
         base.update(installed=True, state="needs_verification")
-        receipt = features.saved(evidence_kind(frames), "")
+        receipt = features.saved(kind, "")
         if receipt.get("ok") is not True:
-            return {**base, "why": f"Run the VSA {frames}-frame feature check first. Memory for this length is not yet measured."}
-        current, recorded = fingerprint(frames), receipt["fingerprint"]
+            return {**base, "why": f"Run the VSA {RECIPES[recipe]} {frames}-frame feature check first. Memory for this recipe is not yet measured."}
+        current, recorded = fingerprint(frames, recipe), receipt["fingerprint"]
         if not matches_qualification(recorded, current, compatibility(recorded), compatibility(current)):
             return {**base, "why": "The VSA recipe, runtime contract or hardware changed; check this recipe again."}
         verify_model_updates(windows_runtime.model_root(),
@@ -215,19 +245,24 @@ def diagnostics(mode: dict | None = None) -> dict:
     for row in found["lengths"]:
         row["available"] = found["available"] and row["installed"]
     found["qualification_summary"] = sweep_summary(found["lengths"])
+    found["input_recipes"] = [{**status(FRAMES, recipe), "id": recipe, "title": title}
+                              for recipe, title in RECIPES.items()]
     return found
 
 
 def require(params: dict) -> dict:
     params = parameters(params)
-    found = route_status()
+    recipe = params.get("recipe", "picture")
+    found = route_status() if recipe == "picture" else status(FRAMES, recipe)
     if not found["available"]:
         raise windows_runtime.RouteUnavailable(found["why"])
     home = library.studio_home().resolve()
-    path = (home / params["image"]).resolve()
-    if not path.is_relative_to(home):
-        raise ValueError("The reference picture must be inside this Studio.")
-    require_image(path)
+    for key in ("image", "extra_image"):
+        if key in params:
+            path = (home / params[key]).resolve()
+            if not path.is_relative_to(home):
+                raise ValueError("The reference picture must be inside this Studio.")
+            require_image(path)
     return params
 
 
@@ -238,7 +273,8 @@ def pressure(snapshot, previous=None) -> str:
     return why
 
 
-def preflight(qualification: bool = False, frames: int = FRAMES, *, wait_for_admission: bool = False) -> None:
+def preflight(qualification: bool = False, frames: int = FRAMES, *, wait_for_admission: bool = False,
+              recipe: str = "picture") -> None:
     frames = calibration_frames(frames)
     from windows_memory import WindowsSignals, WddmMemory, dedicated_snapshot, physical_memory_mb
     if why := prerequisites():
@@ -251,29 +287,31 @@ def preflight(qualification: bool = False, frames: int = FRAMES, *, wait_for_adm
         return
     if wait_for_admission:
         # Renderer imports can consume the small margin left by the supervisor's earlier admission.
-        wait_for_memory(frames, {})
+        wait_for_memory(frames, {}, recipe=recipe)
         return
-    found = memory_fit(snapshot, frames)
+    found = memory_fit(snapshot, frames, recipe=recipe)
     if not found["fits"]:
         raise native.SafetyRefusal(found["reason"])
 
 
-def memory_fit(snapshot=None, frames: int = FRAMES) -> dict:
+def memory_fit(snapshot=None, frames: int = FRAMES, recipe: str = "picture") -> dict:
     frames = calibration_frames(frames)
+    evidence_kind(frames, recipe)
     if snapshot is None:
         from windows_memory import WindowsSignals, WddmMemory, dedicated_snapshot, physical_memory_mb
         with WindowsSignals() as signals:
             snapshot = dedicated_snapshot(physical_memory_mb(), signals, WddmMemory(native.device_uuid()))
     if why := pressure(snapshot):
         raise native.SafetyRefusal(why)
-    baseline = status() if windows_runtime.mode()["enabled"] else None
+    baseline = (status() if recipe == "picture" else status(FRAMES, recipe)) if windows_runtime.mode()["enabled"] or recipe != "picture" else None
     if baseline is not None and not baseline["qualified"]:
         raise native.SafetyRefusal(baseline["why"])
-    found = baseline if baseline is not None and frames == FRAMES else status(frames)
+    found = baseline if baseline is not None and frames == FRAMES else (
+        status(frames) if recipe == "picture" else status(frames, recipe))
     if not found["qualified"]:
         return {"fits": True, "measured": False, "need_mb": None, "available_mb": None, "floor_mb": None,
                 "reason": "This clip length has no matching measured peak; live floors passed and runtime guards remain active."}
-    profile = measured_profile(features.saved(evidence_kind(frames), ""))
+    profile = measured_profile(features.saved(evidence_kind(frames, recipe), ""))
     if (profile.physical_total_mb, profile.host_total_mb, profile.gpu_dedicated_total_mb) != (
             snapshot.physical_total_mb, snapshot.host_total_mb, snapshot.gpu_dedicated_total_mb):
         raise native.SafetyRefusal("The VSA measured profile does not match the current memory partition.")
@@ -294,7 +332,8 @@ def memory_fit(snapshot=None, frames: int = FRAMES) -> dict:
             "reason": "" if fits else f"VSA needs {need} MiB measured commit growth plus its {floor} MiB reserve; {available} MiB is free."}
 
 
-def wait_for_memory(frames: int, observations: dict, timeout_s: int = ADMISSION_TIMEOUT_S) -> None:
+def wait_for_memory(frames: int, observations: dict, timeout_s: int = ADMISSION_TIMEOUT_S,
+                    recipe: str = "picture") -> None:
     """Wait for post-drain recovery, never for a weaker admission policy."""
     from windows_memory import WindowsSignals, WddmMemory, dedicated_snapshot, physical_memory_mb
     frames = calibration_frames(frames)
@@ -323,7 +362,7 @@ def wait_for_memory(frames: int, observations: dict, timeout_s: int = ADMISSION_
                 observations["final"] = asdict(sample)
                 if why := pressure(sample, previous):
                     raise native.SafetyRefusal(why)
-                fit = memory_fit(sample, frames)
+                fit = memory_fit(sample, frames) if recipe == "picture" else memory_fit(sample, frames, recipe)
                 observations.update(admission=fit, reason=fit["reason"],
                                     consecutive_fits=observations["consecutive_fits"] + 1 if fit["fits"] else 0)
                 if time.monotonic() >= deadline:
@@ -365,22 +404,28 @@ def prepare_renderer(args) -> None:
         raise RuntimeError("VSA runs only through its supervised native Windows Studio recipe.")
     qualification = os.environ.get("STUDIO_VSA_CHECK") == "1"
     frames = calibration_frames(int(os.environ.get("STUDIO_VSA_FRAMES", FRAMES))) if qualification else calibration_frames(args.frames)
+    recipe = recipe_name(getattr(args, "vsa_recipe", "picture"))
+    evidence_kind(frames, recipe)
     if ((args.width, args.height, args.frames, args.steps) != (WIDTH, HEIGHT, frames, 4)
-            or len(args.ref or []) != 1 or args.ref_video or args.ref_audio or args.lora
+            or len(args.ref or []) != {"text": 0, "picture": 1, "two-pictures": 2}[recipe] or args.ref_video or args.ref_audio or args.lora
             or args.crop or args.ref_video_sound or args.ref_size != "match" or args.engine != "comfy"
             or float(os.environ.get("SPARK_REF_CFG") or 1) != 1):
         raise ValueError(f"VSA requires its supervised one-picture, {frames}-frame, four-pass recipe.")
-    require_image(Path(args.ref[0]))
-    preflight(qualification=qualification, frames=frames, wait_for_admission=True)
+    for image in args.ref or []:
+        require_image(Path(image))
+    preflight(qualification=qualification, frames=frames, wait_for_admission=True, recipe=recipe)
 
 
 def build(home: Path, params: dict, job_id: str) -> tuple[list[str], dict, list[str]]:
     params = require(params)
     target = home / "renders" / f"{job_id}-vsa" / "video.mp4"
     command = [sys.executable, "-X", "utf8", str(features.PACK / "scripts" / "windows-vsa-check.py"),
-               "--output", str(target.parent), "--image", str((home / params["image"]).resolve()),
+               "--output", str(target.parent), "--recipe", params.get("recipe", "picture"),
                "--prompt", params["prompt"], "--seed", str(params["seed"]),
                "--frames", str(params.get("frames", FRAMES))]
+    for key in ("image", "extra_image"):
+        if key in params:
+            command += ["--" + key.replace("_", "-"), str((home / params[key]).resolve())]
     outputs = [str(target)]
     if "sequence_seconds" in params:
         command += ["--sequence-seconds", str(params["sequence_seconds"])]
@@ -416,27 +461,45 @@ def check_media(target: Path, expected_frames: int) -> None:
         raise RuntimeError("VSA produced a blank or nearly blank first frame.")
 
 
-def run_case(output: Path, image: Path, prompt: str, seed: int, observations: dict, qualification=False,
-             frames: int = FRAMES, timeout_s: int = TIMEOUT_S) -> dict:
+def run_case(output: Path, image: Path | None, prompt: str, seed: int, observations: dict, qualification=False,
+             frames: int = FRAMES, timeout_s: int = TIMEOUT_S, recipe: str = "picture",
+             extra_image: Path | None = None) -> dict:
     frames = calibration_frames(frames)
+    parameters({"recipe": recipe, "prompt": prompt, "seed": seed, "frames": frames,
+                **({"image": str(image)} if image is not None else {}),
+                **({"extra_image": str(extra_image)} if extra_image is not None else {})})
     if type(timeout_s) is not int or not 1 <= timeout_s <= TIMEOUT_S:
         raise ValueError("The VSA part deadline must be between 1 and 1800 seconds.")
     if output.exists():
         raise RuntimeError("VSA needs a fresh output folder.")
     output.mkdir(parents=True)
-    require_image(image)
-    preflight(qualification, frames)
-    before = fingerprint(frames) if not qualification else None
+    for picture in (image, extra_image):
+        if picture is not None:
+            require_image(picture)
+    preflight(qualification, frames, recipe=recipe)
+    before = (fingerprint(frames) if recipe == "picture" else fingerprint(frames, recipe)) if not qualification else None
     command = [windows_cuda.python(), "-X", "utf8", str(features.PACK / "spark" / "spark_generate.py"), "video",
-               "--ref-mode", "vsa", "--ref", str(image), "--ref-size", "match", "--ref-plain",
+               "--ref-mode", "vsa", "--ref-size", "match", "--ref-plain",
                "--engine", "comfy", "--weights", "int8", "--text-encoder", "regular",
                "--width", str(WIDTH), "--height", str(HEIGHT), "--frames", str(frames), "--steps", "4",
                "--seed", str(seed), "--prompt", prompt, "-o", str(output / "video.mp4")]
-    observations.update(case=f"Ref2VA VSA: 864x480, {frames} frames, four passes", rendered=False)
-    result = native.observe_native(command, output, lambda: check_output(output / "video.mp4", frames),
+    for picture in (image, extra_image):
+        if picture is not None:
+            command += ["--ref", str(picture)]
+    if recipe != "picture":
+        command += ["--vsa-recipe", recipe]
+    observations.update(case=f"Ref2VA VSA {RECIPES[recipe]}: 864x480, {frames} frames, four passes",
+                        input_recipe=recipe, rendered=False)
+    def validate():
+        print("[qualification] VSA generation finished; verifying decoded frames, sound and nonblank output.", flush=True)
+        check_output(output / "video.mp4", frames)
+
+    print("[qualification] VSA cold-start generation is running; model loading can take several minutes.", flush=True)
+    result = native.observe_native(command, output, validate,
                                    observations, timeout_s, pressure_policy=pressure, dedicated_floor_mb=2048)
+    print("[qualification] VSA media verification and owned-process cleanup finished.", flush=True)
     if before is not None:
-        save_render(frames, before, observations)
+        save_render(frames, before, observations, recipe)
     return result
 
 
@@ -587,15 +650,15 @@ def length_summary(lengths: list[dict]) -> dict:
             "checked_count": len(passed), "total_count": len(CALIBRATION_FRAMES)}
 
 
-def save_render(frames: int, before: dict, observations: dict) -> None:
-    current = fingerprint(frames)
+def save_render(frames: int, before: dict, observations: dict, recipe: str = "picture") -> None:
+    current = fingerprint(frames, recipe)
     if before["models"] != current["models"] or not matches_qualification(
             before, current, compatibility(before), compatibility(current)):
         raise RuntimeError("The VSA recipe or model changed during rendering; its length success cannot be recorded.")
     record = {"frames": frames, "seconds": seconds_of(frames), "check_only": False,
               "checked_at": datetime.now(timezone.utc).isoformat(), "fingerprint": before, "results": [observations]}
     measured_profile(record)
-    features.save_attempt(f"{KIND}-{frames}-render", record)
+    features.save_attempt(f"{evidence_kind(frames, recipe)}-{frames}-render" if recipe != "picture" else f"{KIND}-{frames}-render", record)
 
 
 def render_status(frames: int) -> dict | None:
@@ -705,11 +768,14 @@ def qualify_lengths(output: Path, job_id: str, report_path: Path) -> dict:
                 os.environ[key] = value
 
 
-def qualify(output: Path, job_id: str, frames: int = FRAMES, timeout_s: int = TIMEOUT_S) -> dict:
+def qualify(output: Path, job_id: str, frames: int = FRAMES, timeout_s: int = TIMEOUT_S,
+            recipe: str = "picture") -> dict:
     frames = calibration_frames(frames)
-    kind = evidence_kind(frames)
+    kind = evidence_kind(frames, recipe)
     attempt = {"feature": KIND, "frames": frames, "check_only": True, "job_id": job_id, "ok": False,
                "checked_at": datetime.now(timezone.utc).isoformat()}
+    if recipe != "picture":
+        attempt["recipe"] = recipe
     observations = {}
     features.save_attempt(kind, attempt)
     try:
@@ -738,17 +804,40 @@ def qualify(output: Path, job_id: str, frames: int = FRAMES, timeout_s: int = TI
         image = output.parent / f"{output.name}-reference.png"
         with Image.open(fixture) as source:
             source.resize((512, 288), Image.Resampling.LANCZOS).save(image)
-        before = fingerprint(frames)
+        before = fingerprint(frames, recipe)
         try:
-            run_case(output, image, PROMPT, 7, observations, qualification=True, frames=frames, timeout_s=timeout_s)
+            if recipe == "picture":
+                run_case(output, image, PROMPT, 7, observations, qualification=True, frames=frames, timeout_s=timeout_s)
+            else:
+                extra = output.parent / f"{output.name}-reference-2.png"
+                try:
+                    if recipe == "two-pictures":
+                        with Image.open(fixture) as source:
+                            source.transpose(Image.Transpose.FLIP_LEFT_RIGHT).resize((512, 288), Image.Resampling.LANCZOS).save(extra)
+                    prompt = ("An empty bakery counter in warm morning light. A locked, still camera.\n"
+                              "overall_soundscape: Soft bakery room ambience.") if recipe == "text" else (
+                              "The baker from <Picture 1> stands in the bakery shown in <Picture 2>. "
+                              "A locked, still camera. Mouth stays closed.\noverall_soundscape: Soft bakery room ambience.")
+                    run_case(output, image if recipe == "two-pictures" else None, prompt, 7, observations,
+                             qualification=True, frames=frames, timeout_s=timeout_s, recipe=recipe,
+                             extra_image=extra if recipe == "two-pictures" else None)
+                finally:
+                    extra.unlink(missing_ok=True)
         finally:
             image.unlink(missing_ok=True)
         digests = dict(previous["model_sha256"]) if previous is not None else {}
         if previous is None:
-            for name, path in model_files().items():
+            files = model_files()
+            print("[qualification] Verifying model SHA-256 checksums; this reads all recipe weights and can take several minutes. No generation is running.", flush=True)
+            for index, (name, path) in enumerate(files.items(), 1):
+                print(f"[qualification] Hashing model {index}/{len(files)}: {path.name}", flush=True)
                 with path.open("rb") as handle:
                     digests[name] = hashlib.file_digest(handle, "sha256").hexdigest()
-        current = fingerprint(frames)
+                print(f"[qualification] Model {index}/{len(files)} checksum complete.", flush=True)
+        else:
+            print("[qualification] Reusing previously verified model checksums.", flush=True)
+        print("[qualification] Checking final provenance and saving the VSA recipe receipt.", flush=True)
+        current = fingerprint(frames, recipe)
         if before["models"] != current["models"] or not matches_qualification(
                 before, current, compatibility(before), compatibility(current)):
             raise RuntimeError("VSA models or execution contract changed during the check.")

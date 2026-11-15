@@ -26,7 +26,7 @@ def sweep(tmp_path, monkeypatch):
                 "model_root": "synthetic-model-root", "abi": {"contract": 1}, "floor": "",
                 "hardware": {"physical_total_mb": 65536, "host_total_mb": 32460,
                              "gpu_dedicated_total_mb": 31232, "device": "synthetic-device"}}
-    monkeypatch.setattr(vsa, "fingerprint", lambda frames=22: {
+    monkeypatch.setattr(vsa, "fingerprint", lambda frames=22, recipe="picture": {
         **deepcopy(identity), "recipe": {"frames": frames}})
     runs, releases = [], []
     monkeypatch.setattr(vsa.windows_runtime, "release_native", lambda: releases.append(True))

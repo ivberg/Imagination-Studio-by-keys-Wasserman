@@ -51,6 +51,151 @@ def test_prompt_is_not_rewritten_and_only_declared_settings_are_returned():
     assert vsa.parameters(params) == params
 
 
+@pytest.mark.parametrize("recipe,count", [("text", 0), ("picture", 1), ("two-pictures", 2)])
+def test_input_recipes_have_distinct_evidence_and_validate_reference_counts(recipe, count):
+    params = {"recipe": recipe, "prompt": "The scene.", "seed": 7}
+    if count:
+        params["image"] = "uploads/one.png"
+    if count == 2:
+        params["extra_image"] = "uploads/two.png"
+    assert vsa.parameters(params)["prompt"] == "The scene."
+    assert len({vsa.evidence_kind(22, name) for name in vsa.RECIPES}) == 3
+    if recipe != "picture":
+        with pytest.raises(ValueError, match="22-frame"):
+            vsa.parameters(params | {"frames": 39})
+        with pytest.raises(ValueError, match="22-frame"):
+            vsa.parameters(params | {"sequence_seconds": 2})
+
+
+@pytest.mark.parametrize("params", [
+    {"recipe": "text", "image": "one.png"},
+    {"recipe": "two-pictures", "image": "one.png"},
+    {"recipe": "picture", "image": "one.png", "extra_image": "two.png"},
+    {"recipe": "unknown"},
+])
+def test_new_input_recipe_rejects_mismatched_images(params):
+    with pytest.raises(ValueError):
+        vsa.parameters({"prompt": "A scene."} | params)
+
+
+@pytest.mark.parametrize("recipe", ["text", "two-pictures"])
+def test_new_input_recipes_require_own_evidence_even_with_gating_off(tmp_path, monkeypatch, recipe):
+    monkeypatch.setattr(vsa, "status", lambda frames=22, recipe="picture": {
+        "installed": True, "available": recipe == "picture", "qualified": recipe == "picture",
+        "why": "Separate input recipe check required."})
+    monkeypatch.setattr(vsa.windows_runtime, "mode", lambda: {"enabled": False})
+    params = {"recipe": recipe, "prompt": "The scene."}
+    if recipe == "two-pictures":
+        params.update(image="one.png", extra_image="two.png")
+    with pytest.raises(windows_runtime.RouteUnavailable, match="Separate"):
+        vsa.require(params)
+    with pytest.raises(vsa.native.SafetyRefusal, match="Separate"):
+        vsa.memory_fit(snapshot(), recipe=recipe)
+
+
+@pytest.mark.parametrize("recipe,count", [("text", 0), ("two-pictures", 2)])
+def test_new_recipe_supervisor_uses_reference_graph_and_independent_preflight(tmp_path, monkeypatch, recipe, count):
+    import sys
+    from PIL import Image
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "spark"))
+    import spark_generate as generation
+    images = [tmp_path / f"reference-{i}.png" for i in range(count)]
+    for image in images:
+        Image.new("RGB", (512, 288)).save(image)
+    preflights, captured = [], []
+    monkeypatch.setattr(vsa, "preflight", lambda *args, **kwargs: preflights.append(kwargs))
+    monkeypatch.setattr(generation, "mac_release", lambda: None)
+    monkeypatch.setattr(generation, "reference", captured.append)
+    def observe(command, output, validate, result, timeout_s, **kwargs):
+        assert kwargs["dedicated_floor_mb"] == 2048
+        monkeypatch.setattr(sys, "argv", command[3:])
+        generation.main()
+        return result
+    monkeypatch.setattr(vsa.native, "observe_native", observe)
+    vsa.run_case(tmp_path / "out", images[0] if count else None, "A scene.", 7, {},
+                 qualification=True, recipe=recipe, extra_image=images[1] if count else None)
+    args = captured[0]
+    assert args.ref_mode == "vsa" and args.vsa_recipe == recipe
+    assert args.ref == [str(image) for image in images]
+    assert preflights == [{"recipe": recipe}]
+    monkeypatch.setenv("STUDIO_REF2VA_VSA", "1")
+    monkeypatch.setenv("STUDIO_VSA_CHECK", "1")
+    monkeypatch.setenv("STUDIO_VSA_FRAMES", "22")
+    monkeypatch.setattr(vsa.sys, "platform", "win32")
+    vsa.prepare_renderer(args)
+    assert preflights[-1]["recipe"] == recipe
+    args.ref = ["wrong-reference.png"] if not count else []
+    with pytest.raises(ValueError, match="recipe"):
+        vsa.prepare_renderer(args)
+
+
+@pytest.mark.parametrize("recipe", ["text", "two-pictures"])
+def test_input_recipe_qualification_api_and_build_preserve_recipe(tmp_path, monkeypatch, recipe):
+    from fastapi import HTTPException
+    monkeypatch.setattr(vsa, "prerequisites", lambda: "")
+    params = windows_checks.parameters({"feature": vsa.KIND, "recipe": recipe})
+    command, env, outputs = windows_checks.build(tmp_path, params, "recipe-check")
+    assert command[command.index("--recipe") + 1] == recipe
+    assert "--qualify" in command
+    with pytest.raises(HTTPException) as rejected:
+        windows_checks.parameters(params | {"frames": 39})
+    assert rejected.value.status_code == 400
+
+
+@pytest.mark.parametrize("recipe", ["text", "two-pictures"])
+@pytest.mark.parametrize("refused", [False, True])
+def test_new_recipe_check_keeps_receipts_and_failures_separate(tmp_path, monkeypatch, recipe, refused):
+    writes, runs = [], []
+    monkeypatch.setattr(vsa, "prerequisites", lambda: "")
+    monkeypatch.setattr(vsa, "fingerprint", lambda frames=22, recipe="picture": {
+        "models": {}, "recipe": {"frames": frames, "input_recipe": recipe}})
+    monkeypatch.setattr(vsa, "compatibility", lambda value: value)
+    monkeypatch.setattr(vsa, "model_files", lambda: {})
+    monkeypatch.setattr(vsa.features, "save_attempt", lambda kind, value: writes.append(("attempt", kind, value)))
+    monkeypatch.setattr(vsa.features, "save_pass", lambda kind, value: writes.append(("pass", kind, value)))
+    def run(output, image, prompt, seed, observations, **kwargs):
+        runs.append((image, kwargs))
+        if refused:
+            raise vsa.native.SafetyRefusal("Live floor refusal")
+        observations.update(receipt()["results"][0])
+    monkeypatch.setattr(vsa, "run_case", run)
+    if refused:
+        with pytest.raises(vsa.native.SafetyRefusal, match="Live floor"):
+            vsa.qualify(tmp_path / "output", "new-input-check", recipe=recipe)
+        assert not any(action == "pass" for action, _, _ in writes)
+    else:
+        result = vsa.qualify(tmp_path / "output", "new-input-check", recipe=recipe)
+        assert result["ok"] and result["fingerprint"]["recipe"]["input_recipe"] == recipe
+    assert all(kind == vsa.evidence_kind(22, recipe) for _, kind, _ in writes)
+    assert runs[0][1]["qualification"] and runs[0][1]["recipe"] == recipe
+    assert (runs[0][0] is None) == (recipe == "text")
+    assert not list(tmp_path.glob("*reference*.png"))
+
+
+def test_qualification_reports_checksum_work_before_saving_receipt(tmp_path, monkeypatch, capsys):
+    weight = tmp_path / "synthetic.safetensors"
+    weight.write_bytes(b"synthetic model")
+    monkeypatch.setattr(vsa, "prerequisites", lambda: "")
+    monkeypatch.setattr(vsa, "fingerprint", lambda *args: {"models": {}})
+    monkeypatch.setattr(vsa, "compatibility", lambda value: value)
+    monkeypatch.setattr(vsa, "model_files", lambda: {"model": weight})
+    monkeypatch.setattr(vsa.features, "save_attempt", lambda *args: None)
+    saved = []
+    def save(kind, receipt):
+        progress = capsys.readouterr().out
+        assert "No generation is running" in progress
+        assert "Hashing model 1/1: synthetic.safetensors" in progress
+        assert "Model 1/1 checksum complete" in progress
+        assert "saving the VSA recipe receipt" in progress
+        saved.append(receipt)
+    monkeypatch.setattr(vsa.features, "save_pass", save)
+    monkeypatch.setattr(vsa, "run_case", lambda output, image, prompt, seed, observations, **kwargs:
+                        observations.update(receipt()["results"][0]))
+    vsa.qualify(tmp_path / "output", "progress-check", recipe="text")
+    import hashlib
+    assert saved[0]["model_sha256"] == {"model": hashlib.sha256(weight.read_bytes()).hexdigest()}
+
+
 def test_synthetic_or_unrendered_results_never_form_a_measured_profile():
     saved = receipt()
     saved["results"][0]["rendered"] = False
@@ -248,7 +393,7 @@ def test_supervised_command_parses_with_the_real_renderer_and_fixed_reference_po
     if frames != 22:
         monkeypatch.setenv("STUDIO_VSA_CHECK", "0")
         vsa.prepare_renderer(args)
-        assert preflights[-1] == (False, frames, {"wait_for_admission": True})
+        assert preflights[-1] == (False, frames, {"wait_for_admission": True, "recipe": "picture"})
         monkeypatch.setenv("STUDIO_VSA_CHECK", "1")
     monkeypatch.setattr(generation, "up", lambda: False)
     monkeypatch.setattr(generation, "side", lambda name: tmp_path / name)
@@ -434,7 +579,7 @@ def test_longer_calibration_saves_separate_evidence_and_reuses_verified_checksum
     monkeypatch.setattr(vsa.features, "saved", lambda kind, suffix: previous)
     monkeypatch.setattr(vsa.features, "save_attempt", lambda kind, value: writes.append(("attempt", kind, value)))
     monkeypatch.setattr(vsa.features, "save_pass", lambda kind, value: writes.append(("pass", kind, value)))
-    monkeypatch.setattr(vsa, "fingerprint", lambda frames=22: {"models": {}, "recipe": {"frames": frames}})
+    monkeypatch.setattr(vsa, "fingerprint", lambda frames=22, recipe="picture": {"models": {}, "recipe": {"frames": frames}})
     monkeypatch.setattr(vsa, "compatibility", lambda value: value)
     monkeypatch.setattr(vsa, "verify_model_updates", lambda *args: verifications.append(args))
     monkeypatch.setattr(vsa, "model_files", lambda: pytest.fail("Unchanged models must not be rehashed"))
@@ -462,7 +607,7 @@ def test_page_exposes_unmeasured_model_lengths_with_explicit_check_action():
     from test_shell_page import run
     page = (Path(__file__).resolve().parents[1] / "app" / "static" / "index.html").read_text(encoding="utf-8")
     chooser = page[page.index("function vsaLengths()"):page.index("function viewVsa()")]
-    out = run("globalThis.VSA = {frames: 22};\n" + chooser + """
+    out = run("globalThis.VSA = {frames: 22, recipe: 'picture'};\n" + chooser + """
       S.windows_vsa = {available: true, qualified: true, installed: true,
         lengths: Array.from({length:21}, (_, i) => { const frames = 22 + 17 * i;
           return {frames, seconds:frames / 24, available:true, qualified:frames <= 39,

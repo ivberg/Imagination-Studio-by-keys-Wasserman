@@ -872,7 +872,7 @@ def video(args) -> None:
             sys.exit(f"--{name} must be a multiple of {step}, got {value}")
     if (args.frames - 5) % 17:
         sys.exit(f"--frames must be 17n + 5 (22, 39, 56, ... 362), got {args.frames}")
-    if args.ref or args.ref_video or args.ref_audio:
+    if args.ref or args.ref_video or args.ref_audio or args.ref_mode == "vsa":
         return reference(args)
     base = args.base == "h3"
     if args.steps is None:
@@ -1511,6 +1511,8 @@ def main() -> None:
     v.add_argument("--ref-mode", choices=("turbo", "full", "vsa"), default="full",
                    help="full: 20 steps; turbo: the bf16 model with LightX2V's 4-pass adapter; "
                         "vsa: supervised native Windows recipe only")
+    v.add_argument("--vsa-recipe", choices=("picture", "text", "two-pictures"), default="picture",
+                   help="input recipe for the supervised Windows VSA backend")
     v.add_argument("--ref-size", choices=("match", "max"), default="match",
                    help="match: references scaled down to the clip's pixel area (what the adapter was trained with); "
                         "max: up to 2048 pixels on the short edge, several times slower")

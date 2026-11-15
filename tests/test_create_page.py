@@ -52,6 +52,41 @@ def create_run(code):
     """ + code)
 
 
+@pytest.mark.parametrize("recipe", ["text", "two-pictures"])
+def test_new_vsa_recipes_have_independent_readiness_and_send_only_their_inputs(recipe):
+    out = create_run(f'VSA.recipe={recipe!r}; VSA.frames=22;\n' + """
+      C.step=4;
+      out.blocked=button(viewCreate(),"Render 22 frames").attrs.disabled;
+      S.windows_vsa.input_recipes=[{id:VSA.recipe,available:true,qualified:true,scope:"22 frames"}];
+      VSA.second={image:"uploads/second.png",reference:{path:"uploads/second.png",ready:true}};
+      answers["/api/jobs"]={id:"new-recipe"};
+      await button(viewCreate(),"Render 22 frames").attrs.onclick();
+      out.request=calls.find(([path])=>path==="/api/jobs")[1];
+      C.step=1; out.references=text(viewCreate());
+    """)
+    assert out["blocked"] is True
+    params = out["request"]["params"]
+    assert params["recipe"] == recipe and params["frames"] == 22
+    if recipe == "text":
+        assert "image" not in params and "extra_image" not in params
+        assert "uses no reference picture" in out["references"]
+    else:
+        assert params["image"] == "uploads/reference.png" and params["extra_image"] == "uploads/second.png"
+        assert "<Picture 2>" in out["references"]
+
+
+def test_text_only_composer_does_not_invent_picture_conditioning():
+    out = create_run("""
+      VSA.recipe="text"; VSA.frames=22; C.step=3;
+      answers["/api/compose"]={prompt:"An empty bakery."};
+      const root=viewCreate();
+      await button(root,"Rebuild from steps").attrs.onclick();
+      out.request=calls.find(([path])=>path==="/api/compose")[1];
+    """)
+    assert out["request"]["referenced"] is False
+    assert out["request"]["references"] == 0 and out["request"]["first_frame"] is False
+
+
 def production_run(code):
     production = PAGE[PAGE.index("/* ---------- Production"):PAGE.index("/* ---------- Editor")]
     return create_run(production + """
@@ -381,10 +416,15 @@ def test_scout_handoff_preserves_backend_and_keeps_supported_frame_separate():
       out.state=[C.goes,C.step,C.videoBackend,C.image,VSA.image];
       out.request=calls.find(([path])=>path==="/api/video-vsa/reference")[1];
       out.ready=vsaReferenceReady();
+      const form=viewCreate();
+      out.referenceForm=text(form).includes("Create resized reference copy");
+      out.imageForm=!!button(form,"Make image");
+      out.mode=C.mode;
     """)
     assert out["imageBackend"] == "vsa"
     assert out["state"] == ["video", 1, "vsa", "uploads/supported-first.png", "scouts/chosen.png"]
     assert out["request"] == {"path": "scouts/chosen.png"} and not out["ready"]
+    assert out["referenceForm"] and not out["imageForm"] and out["mode"] == "r2v"
 
 
 def test_supported_picture_handoff_stays_a_first_frame_without_vsa_requests():

@@ -82,6 +82,32 @@ def test_the_panel_groups_needs_says_their_state_and_links_on_use_it():
     assert out["scan"] is True
 
 
+def test_vsa_inventory_links_to_its_own_feature_check():
+    out = run("""
+      globalThis.openFeatureCheck = id => { out.feature = id; };
+      const box = el("div");
+      DSC.data = {inventory_only: true, needs: [{
+        id: "windows-video-vsa", label: "MiniMax H3 Ref2VA VSA", engine: "Video",
+        state: "expected", installed_label: "weights in place", feature: "video-vsa",
+        requirements_note: "Weights in place does not mean qualified."
+      }]};
+      dscDraw(box);
+      out.text = text(box);
+      button(box, "Feature checks").attrs.onclick();
+      DSC.data.needs[0].state = "missing";
+      DSC.data.needs[0].install = {how: "manual"};
+      DSC.data.needs[0].download = "Install the recipe weights; node setup does not download weights.";
+      dscDraw(box);
+      out.missing = text(box);
+      out.fakeSetup = !!button(box, "Copy setup command");
+    """)
+    assert "MiniMax H3 Ref2VA VSA" in out["text"] and "weights in place" in out["text"]
+    assert "does not mean qualified" in out["text"]
+    assert out["feature"] == "video-vsa"
+    assert "node setup does not download weights" in out["missing"]
+    assert not out["fakeSetup"]
+
+
 def test_unlink_and_the_optional_toggle():
     out = run(f"""answers["/api/discover"] = {json.dumps(STATE)};
       const box = viewDiscover(); await tick(); await tick();
