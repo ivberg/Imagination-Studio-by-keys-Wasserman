@@ -264,7 +264,7 @@ async function slRender(scene, shot, chain) { const tf = slTf(shot), c = await s
   const prompt = (tf.h3Auto === false && tf.h3.trim()) || c.prompt, vsa = c.kind === "video-vsa";
   const j = await api("/api/jobs", { kind: vsa ? "video-vsa" : "video", title: scene.name + " · " + shot.name, params: vsa ? { ...c.plan, prompt } : { ...c.plan, prompt, output, ...((c.plan.loras || []).length ? { loras: lorasOf(c.plan) } : !(c.plan.references || []).length && lorasOf(slFilm()).length ? { loras: lorasOf(slFilm()) } : {}), brain: { backend: SL.p.defaults.brain, endpoint: SL.p.defaults.localEndpoint, model: SL.p.defaults.localModel }, slate: { project: SL.p.id, scene: scene.id, shot: shot.id } } });
   if (vsa) output = "renders/" + j.id + "-vsa/video.mp4";
-  shot.takes.unshift({ id: slId("take"), loggedAt: slNow(), model: vsa ? "minimax-h3-ref2va-vsa" : "minimax-h3", prompt, rating: "good", notes: "", mediaPath: output, jobId: j.id, seed: c.plan.seed, settings: { ...Object.fromEntries(["preset", "quality", "frames", "seconds", "width", "height", "loras"].filter(k => j.params && j.params[k] != null).map(k => [k, j.params[k]])), ...(vsa ? { backend: "vsa", width: 864, height: 480, quality: "VSA · 4 passes" } : {}) } }); return output; }
+  shot.takes.unshift({ id: slId("take"), loggedAt: slNow(), model: vsa ? "minimax-h3-ref2va-vsa" : "minimax-h3", prompt, rating: "good", notes: "", mediaPath: output, jobId: j.id, seed: c.plan.seed, settings: { ...Object.fromEntries(["preset", "quality", "frames", "seconds", "width", "height", "loras"].filter(k => j.params && j.params[k] != null).map(k => [k, j.params[k]])), ...(vsa ? { backend: "vsa", recipe: c.plan.recipe || "picture", width: 864, height: 480, quality: "VSA · 4 passes" } : {}) } }); return output; }
 // A take rendered somewhere else (another machine's app, or a file) logged into this shot with its seed and settings.
 async function slImportTake(shot, given) { const body = { projectId: SL.p.id, shot: shot.id, ...Object.fromEntries(Object.entries(given).filter(([, v]) => v !== "" && v != null)) };
   slCancel(); await slPut();  // the film as it is now: the server reads the shot from the file
@@ -500,6 +500,7 @@ function slComfy(project, shot) {
 }
 
 function slRoll(scene, shot) { const tf = slTf(shot), p = SL.p, plan = SL.plan[shot.id], redo = () => { delete SL.plan[shot.id]; slDraw(); }, soft = () => { tf.h3Auto !== false && delete SL.plan[shot.id]; };
+  if (tf.start === "vsa" && !tf.vsa_recipe) tf.vsa_recipe = "picture";
   if (!plan) { SL.plan[shot.id] = { pending: true }; slCompile(shot).then(render, e => { SL.plan[shot.id] = { prompt: "", plan: {}, warnings: [e.message], mode: "text" }; render(); }); }
   const up = el("input", { type: "file", accept: "image/*", onchange: async () => { const data = new FormData(); data.append("file", up.files[0]); const j = await (await fetch("/api/upload", { method: "POST", body: data })).json(); if (j.path) { tf.image = j.path; redo(); } else toast(j.error || "upload failed"); } });
   const h3 = el("textarea", { style: "min-height:190px;font:13.5px/1.5 var(--mono)" }); h3.value = tf.h3 || (plan && plan.prompt) || ""; h3.addEventListener("input", () => { tf.h3 = h3.value; tf.h3Auto = false; slSave(); });
@@ -507,8 +508,17 @@ function slRoll(scene, shot) { const tf = slTf(shot), p = SL.p, plan = SL.plan[s
   return el("div", { class: "group" }, el("label", {}, "Roll camera · this shot opens on"),
     choice(tf, "start", { text: ["Text only", "the model invents the frame"], previous: ["The shot before", "its last frame, no cut"], image: ["An image", "your own first frame"], cast: ["Cast stills", S.ref2va ? "reference pictures keep the faces" : "needs the Ref2VA model"], ...(S.windows_vsa ? { vsa: ["VSA reference", "one picture, not an exact first frame"] } : {}) }, redo, true),
     tf.start === "image" ? el("div", { class: "row" }, field("Upload the first frame", up), field("or a path from the Library", slIn(tf, "image", { placeholder: "scouts/…/scout_s3.png" }, soft))) : null,
-    tf.start === "vsa" ? el("div", {}, field("VSA reference picture in the Library", slIn(tf, "vsa_image", { placeholder: "uploads/reference.png" }, soft)),
-      el("div", { class: "note" }, "Use Create → Reference picture to prepare an explicit copy up to 512x288. Set the film to 480p and 16:9. The film's quality preset is replaced by four VSA passes. Extra LoRAs, Drama 3 and video references are refused. Review or recompile an edited prompt after changing opening mode.")) : null,
+    tf.start === "vsa" ? el("div", {},
+      field("VSA input recipe", slPick(tf, "vsa_recipe", vsaRecipeOptions(), redo)),
+      vsaPictureCount(tf.vsa_recipe || "picture") ? field("VSA reference picture in the Library", slIn(tf, "vsa_image", { placeholder: "uploads/reference.png" }, soft)) : null,
+      tf.vsa_recipe === "two-pictures" ? field("Second VSA reference picture", slIn(tf, "vsa_extra_image", { placeholder: "uploads/reference-2.png" }, soft)) : null,
+      vsaHasVideo(tf.vsa_recipe || "picture") ? [
+        field("Bounded VSA reference MP4", slIn(tf, "vsa_video", { placeholder: "uploads/reference.mp4" }, soft)),
+        field("What <Video 1> provides", slIn(tf, "vsa_video_note", {}, soft))] : null,
+      vsaHasAudio(tf.vsa_recipe || "picture") ? [
+        field("Bounded VSA reference WAV", slIn(tf, "vsa_audio", { placeholder: "uploads/reference.wav" }, soft)),
+        field("What <Audio 1> provides", slIn(tf, "vsa_audio_note", {}, soft))] : null,
+      el("div", { class: "note" }, "Use Create to inspect bounded references and prepare picture copies up to 512x288. Set the film to 480p and 16:9. Every recipe except one picture needs exactly 22 output frames and its own local feature check; only 0.917 s of media is used. Video with its own sound uses <Audio 1>. Four VSA passes replace film quality. Extra LoRAs, automatic previs and Drama 3 are refused. Recompile after changing recipe or references.")) : null,
     el("label", {}, "Who is in the shot, and where"), el("div", { class: "row" }, el("div", { class: "chips" }, p.characters.length ? p.characters.map(c => el("button", { class: "small" + (tf.cast.includes(c.id) ? " on" : ""), title: (c.images || []).length ? "has a reference still" : "no still pinned", onclick: () => { tf.cast.includes(c.id) ? tf.cast.splice(tf.cast.indexOf(c.id), 1) : tf.cast.push(c.id); redo(); } }, ((c.images || []).length ? "◉ " : "") + c.name)) : el("span", { class: "note" }, "No one cast yet: Studios → Casting.")),
       el("div", { class: "fit", style: "width:230px" }, slPick(tf, "location", { "": "no location sheet", ...Object.fromEntries(p.locations.map(l => [l.id, l.name])) }, redo))),
     el("label", {}, "Spoken lines"), tf.lines.map((line, i) => el("div", { class: "row", style: "margin-bottom:6px" }, el("div", { class: "fit", style: "width:160px" }, slPick(line, "characterId", { "": "speaker", ...Object.fromEntries(p.characters.map(c => [c.id, c.name])) }, soft)),

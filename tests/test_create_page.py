@@ -52,13 +52,16 @@ def create_run(code):
     """ + code)
 
 
-@pytest.mark.parametrize("recipe", ["text", "two-pictures"])
+@pytest.mark.parametrize("recipe", ["text", "two-pictures", "picture-audio", "video", "video-audio", "video-sound"])
 def test_new_vsa_recipes_have_independent_readiness_and_send_only_their_inputs(recipe):
     out = create_run(f'VSA.recipe={recipe!r}; VSA.frames=22;\n' + """
       C.step=4;
       out.blocked=button(viewCreate(),"Render 22 frames").attrs.disabled;
       S.windows_vsa.input_recipes=[{id:VSA.recipe,available:true,qualified:true,scope:"22 frames"}];
       VSA.second={image:"uploads/second.png",reference:{path:"uploads/second.png",ready:true}};
+      VSA.audio="uploads/sound.wav"; VSA.audioReady=true;
+      VSA.video="uploads/clip.mp4"; VSA.videoReady=true;
+      VSA.videoSound=VSA.recipe==="video-sound";
       answers["/api/jobs"]={id:"new-recipe"};
       await button(viewCreate(),"Render 22 frames").attrs.onclick();
       out.request=calls.find(([path])=>path==="/api/jobs")[1];
@@ -70,9 +73,114 @@ def test_new_vsa_recipes_have_independent_readiness_and_send_only_their_inputs(r
     if recipe == "text":
         assert "image" not in params and "extra_image" not in params
         assert "uses no reference picture" in out["references"]
-    else:
+    elif recipe == "two-pictures":
         assert params["image"] == "uploads/reference.png" and params["extra_image"] == "uploads/second.png"
         assert "<Picture 2>" in out["references"]
+    elif recipe == "picture-audio":
+        assert params["image"] == "uploads/reference.png" and params["audio"] == "uploads/sound.wav"
+        assert "extra_image" not in params and "0.917 s" in out["references"]
+    else:
+        assert params["video"] == "uploads/clip.mp4"
+        assert not {"image", "extra_image"} & params.keys()
+        assert ("audio" in params) == (recipe == "video-audio")
+        assert "first 22 frames" in out["references"]
+
+
+def test_video_recipe_checks_its_own_media_and_does_not_invent_a_picture():
+    out = create_run("""
+      VSA.recipe="video"; VSA.frames=22; C.step=4;
+      S.windows_vsa.input_recipes=[{id:VSA.recipe,available:true,qualified:true,scope:"22 frames"}];
+      out.blocked=button(viewCreate(),"Render 22 frames").attrs.disabled;
+      answers["/api/video-vsa/reference"]={path:"uploads/clip.mp4",ready:true,source_seconds:2,
+        effective_seconds:22/24,width:512,height:288,frames:48,fps:24};
+      await vsaSelectVideo("uploads/clip.mp4");
+      out.ready=!button(viewCreate(),"Render 22 frames").attrs.disabled;
+      VSA.videoNote="The baker and bakery"; C.refVideos=["unrelated.mp4"]; C.video_subjects=["Unrelated"];
+      C.step=3;answers["/api/compose"]={prompt:"From <Video 1>."};
+      await button(viewCreate(),"Rebuild from steps").attrs.onclick();
+      out.request=calls.find(([path])=>path==="/api/compose")[1];
+      answers["/api/video-vsa/reference"]=new Error("The clip has audio");
+      await vsaSelectVideo("uploads/wrong.mp4");
+      C.step=4;out.rejected=button(viewCreate(),"Render 22 frames").attrs.disabled;
+    """)
+    assert out["blocked"] and out["ready"] and out["rejected"]
+    assert out["request"]["references"] == 0 and out["request"]["referenced"]
+    assert not out["request"]["first_frame"]
+    assert out["request"]["fields"]["video_subjects"] == ["The baker and bakery"]
+
+
+def test_audio_recipe_requires_checked_audio_and_composes_its_own_reference():
+    out = create_run("""
+      VSA.recipe="picture-audio"; VSA.frames=22; C.step=4;
+      S.windows_vsa.input_recipes=[{id:VSA.recipe,available:true,qualified:true,scope:"22 frames"}];
+      out.blocked=button(viewCreate(),"Render 22 frames").attrs.disabled;
+      answers["/api/video-vsa/reference"]={path:"uploads/sound.wav",ready:true,source_seconds:2,effective_seconds:22/24};
+      await vsaSelectAudio("uploads/sound.wav");
+      out.ready=!button(viewCreate(),"Render 22 frames").attrs.disabled;
+      VSA.audioNote="Bakery sounds"; C.refAudios=["unrelated.wav"]; C.audio_notes=["Unrelated voice"];
+      C.step=3;answers["/api/compose"]={prompt:"From <Audio 1>."};
+      await button(viewCreate(),"Rebuild from steps").attrs.onclick();
+      out.fields=calls.find(([path])=>path==="/api/compose")[1].fields;
+      answers["/api/video-vsa/reference"]=new Error("Wrong WAV duration");
+      await vsaSelectAudio("uploads/wrong.wav");
+      C.step=4;out.rejected=button(viewCreate(),"Render 22 frames").attrs.disabled;
+    """)
+    assert out["blocked"] and out["ready"] and out["rejected"]
+    assert out["fields"]["audio_notes"] == ["Bakery sounds"] and "refAudios" not in out["fields"]
+
+
+@pytest.mark.parametrize("recipe", ["video-audio", "video-sound"])
+def test_video_sound_modes_keep_readiness_and_prompt_numbering_separate(recipe):
+    out = create_run(f'VSA.recipe={recipe!r}; VSA.frames=22;\n' + """
+      answers["/api/video-vsa/reference"]={path:"uploads/clip.mp4",ready:true,source_seconds:2,
+        effective_seconds:22/24,width:512,height:288,frames:48,fps:24,video_sound:VSA.recipe==="video-sound"};
+      await vsaSelectVideo("uploads/clip.mp4");
+      out.withoutAudio=vsaReferenceReady();
+      VSA.audio="uploads/sound.wav";VSA.audioReady=true;VSA.videoNote="The bakery";VSA.audioNote="Bakery sounds";
+      out.ready=vsaReferenceReady();C.step=3;
+      answers["/api/compose"]={prompt:"Reference."};
+      await button(viewCreate(),"Rebuild from steps").attrs.onclick();
+      out.request=calls.find(([path])=>path==="/api/compose")[1];
+      out.check=calls.find(([path])=>path==="/api/video-vsa/reference")[1];
+      VSA.recipe=VSA.recipe==="video-sound" ? "video" : "video-sound";
+      vsaRecipeChanged();out.afterSwitch=vsaReferenceReady();
+    """)
+    assert out["withoutAudio"] == (recipe == "video-sound")
+    assert out["ready"] and not out["afterSwitch"]
+    assert out["request"]["references"] == 0
+    fields = out["request"]["fields"]
+    assert fields["video_subjects"] == ["The bakery"]
+    assert bool(fields.get("video_sound")) == (recipe == "video-sound")
+    assert ("audio_notes" in fields) == (recipe == "video-audio")
+    assert bool(out["check"].get("video_sound")) == (recipe == "video-sound")
+
+
+def test_switching_video_recipe_discards_inflight_validation():
+    out = create_run("""
+      VSA.recipe="video-sound";VSA.frames=22;
+      let finish;answers["/api/video-vsa/reference"]=new Promise(resolve=>{finish=resolve;});
+      const request=vsaSelectVideo("uploads/clip.mp4");
+      VSA.recipe="video";vsaRecipeChanged();
+      finish({path:"uploads/clip.mp4",ready:true,source_seconds:2,effective_seconds:22/24,
+        width:512,height:288,frames:48,fps:24,video_sound:true});
+      await request;out.ready=vsaReferenceReady();out.busy=VSA.videoBusy;
+    """)
+    assert not out["ready"] and not out["busy"]
+
+
+@pytest.mark.parametrize("recipe", ["video", "video-sound", "picture-audio"])
+def test_library_media_handoff_opens_reference_step_without_queuing(recipe):
+    kind = "audio" if recipe == "picture-audio" else "video"
+    out = create_run(f'const recipe={recipe!r}, kind={kind!r};\n' + """
+      answers["/api/video-vsa/reference"]={path:"uploads/reference",ready:true,source_seconds:2,
+        effective_seconds:22/24,width:512,height:288,frames:48,fps:24,video_sound:recipe==="video-sound"};
+      await useVsaMedia("uploads/reference",recipe);
+      out.state=[C.goes,C.videoBackend,C.step,VSA.recipe,VSA.frames,VSA.mode,C.prompt];
+      out.request=calls.find(([path])=>path==="/api/video-vsa/reference")[1];
+      out.queued=calls.some(([path])=>path==="/api/jobs");
+    """)
+    assert out["state"] == ["video", "vsa", 1, recipe, 22, "single", ""]
+    assert out["request"]["kind"] == kind and not out["queued"]
 
 
 def test_text_only_composer_does_not_invent_picture_conditioning():
@@ -95,6 +203,28 @@ def production_run(code):
       globalThis.loraHub=()=>null; globalThis.lengthPicker=()=>null;
       answers["/api/projects"]=[];
     """ + code)
+
+
+@pytest.mark.parametrize("recipe", ["text", "two-pictures", "picture-audio", "video", "video-audio", "video-sound"])
+def test_production_board_carries_only_selected_vsa_recipe_and_rebuilds_reference_prompt(recipe):
+    out = production_run(f'const recipe={recipe!r};\n' + """
+      const seg={start:"vsa",vsaRecipe:recipe,vsaImage:"uploads/one.png",vsaExtraImage:"uploads/two.png",
+        vsaVideo:"uploads/clip.mp4",vsaAudio:"uploads/sound.wav",vsaVideoNote:"The bakery",
+        vsaAudioNote:"Bakery sounds",frames:22,seed:0,scene:"A bakery"};
+      project={id:"test",preset:"small",quality:"standard",segments:[seg]};
+      answers["/api/compose"]={prompt:"Reference."};answers["/api/jobs"]={id:"new-recipe"};
+      await generateSeg(0);
+      out.compose=calls.find(([path])=>path==="/api/compose")[1];
+      out.params=calls.find(([path])=>path==="/api/jobs")[1].params;
+    """)
+    params, compose = out["params"], out["compose"]
+    assert params["recipe"] == recipe and params["seed"] == 0 and params["frames"] == 22
+    assert ("video" in params) == recipe.startswith("video")
+    assert ("audio" in params) == (recipe in ("picture-audio", "video-audio"))
+    assert ("image" in params) == (recipe in ("two-pictures", "picture-audio"))
+    assert ("extra_image" in params) == (recipe == "two-pictures")
+    assert compose["referenced"] == (recipe != "text")
+    assert bool(compose["fields"].get("video_sound")) == (recipe == "video-sound")
 
 
 @pytest.mark.parametrize("status,finished,retry,busy", [
@@ -373,7 +503,7 @@ def test_vsa_render_keeps_existing_blockers(missing):
     """)
     assert out["disabled"] and out["calls"] == 0
     assert {
-        "baseline": "Basic check required", "picture": "Choose and check a reference picture in step 2",
+        "baseline": "Basic check required", "picture": "Choose and check this recipe's references in step 2",
         "prompt": "Open step 4", "duration": "whole number of seconds from 1 to 60",
     }[missing] in out["text"]
 

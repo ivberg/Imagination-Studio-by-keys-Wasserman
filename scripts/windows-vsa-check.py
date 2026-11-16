@@ -25,6 +25,8 @@ parser.add_argument("--report", type=Path)
 parser.add_argument("--job-id", default="")
 parser.add_argument("--image", type=Path)
 parser.add_argument("--extra-image", type=Path)
+parser.add_argument("--audio", type=Path)
+parser.add_argument("--video", type=Path)
 parser.add_argument("--recipe", choices=vsa.RECIPES, default="picture")
 parser.add_argument("--prompt")
 parser.add_argument("--seed", type=int, default=7)
@@ -33,7 +35,7 @@ parser.add_argument("--sequence-seconds", type=int)
 args = parser.parse_args()
 try:
     checking = args.qualify or args.sweep
-    if checking and (args.report is None or args.image is not None or args.extra_image is not None or args.prompt is not None or args.sequence_seconds is not None):
+    if checking and (args.report is None or args.image is not None or args.extra_image is not None or args.audio is not None or args.video is not None or args.prompt is not None or args.sequence_seconds is not None):
         parser.error("Qualification needs --report, not a custom image or prompt.")
     if args.sweep and args.frames != vsa.FRAMES:
         parser.error("An automatic sweep chooses its own model-valid frame counts.")
@@ -61,7 +63,9 @@ try:
         os.environ.pop("STUDIO_VSA_FRAMES", None)
         params = vsa.parameters({"recipe": args.recipe, "prompt": args.prompt, "seed": args.seed, "frames": args.frames,
                                  **({"image": str(args.image)} if args.image is not None else {}),
-                                 **({"extra_image": str(args.extra_image)} if args.extra_image is not None else {})})
+                                 **({"extra_image": str(args.extra_image)} if args.extra_image is not None else {}),
+                                 **({"audio": str(args.audio)} if args.audio is not None else {}),
+                                 **({"video": str(args.video)} if args.video is not None else {})})
         if args.sequence_seconds is not None:
             params = vsa.parameters({**params, "sequence_seconds": args.sequence_seconds})
         vsa.require(params)
@@ -70,7 +74,7 @@ try:
         else:
             observations = {}
             vsa.run_case(args.output, args.image, args.prompt, args.seed, observations, frames=args.frames,
-                         recipe=args.recipe, extra_image=args.extra_image)
+                         recipe=args.recipe, extra_image=args.extra_image, audio=args.audio, video=args.video)
             (args.output / "measurements.json").write_text(json.dumps(observations, indent=2), encoding="utf-8")
 except (OSError, RuntimeError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
     print(str(error), file=sys.stderr)

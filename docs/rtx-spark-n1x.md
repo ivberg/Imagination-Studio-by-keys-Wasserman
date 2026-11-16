@@ -31,12 +31,39 @@ Missing weights are listed by filename; the node-only setup command does not dow
 Restart the **real Studio**, then select **Video -> Video backend -> Ref2VA VSA**, or choose that backend in Create.
 On the Video landing, **Video backend** selects supported H3/FastH3 or Ref2VA VSA; the cards are workflows
 for that backend, not different backends. VSA's one-picture and scout handoffs keep their existing recipe.
-**Text only** and **Two pictures** are additional, initially unverified input recipes, bounded to
+**Text only**, **Two pictures**, **Picture and audio**, **Silent video reference**,
+**Silent video and audio** and **Video with its own sound** are additional,
+initially unverified input recipes, bounded to
 864x480, 22 frames, four passes and pictures no larger than 512x288 each. They require their own local
 Feature checks even when ordinary qualification badges/gating are off; a one-picture pass never qualifies
 them. The checks verify output and supervised memory behavior, not prompt adherence or reference fidelity.
 The two-picture check uses the pinned baker fixture and a mirrored copy as a second reference.
-Run either explicitly through **Machine -> Feature checks -> Video -> Ref2VA VSA**, or the checks API
+The picture-and-audio recipe accepts one picture and one exactly two-second PCM16 WAV at 32000 Hz,
+mono or stereo, no larger than 300000 bytes. It uses only the first 22/24 seconds of that sound:
+this is an execution and memory check, not a voice-likeness or full two-second reference qualification.
+Its check extracts a bounded WAV from the existing checksum-pinned baker sample, without generating
+another input or changing the sample. In Create, select this input recipe, upload the bounded WAV in
+step 2 and describe what `<Audio 1>` provides. Pictures and audio are checked again before rendering.
+The silent-video recipe accepts one H.264 MP4 with exactly 48 frames at 24 fps (two seconds), no audio
+stream, sides in multiples of 32 up to 512x288, aspect ratio between 1:4 and 4:1, and at most 5000000
+bytes. Only its first 22 frames (0.917 s) condition the output. This is an execution and memory check,
+not a motion-fidelity or full two-second reference qualification. Its check prepares a scaled H.264,
+silent copy of the same pinned baker sample. Create accepts an already bounded MP4 in step 2 and
+lets you describe what `<Video 1>` provides. The source's size, streams, frame count, rate and duration
+are probed with a ten-second deadline before queuing and again before the renderer loads models.
+The initial lossless fixture copy was 6379315 bytes and was correctly refused before model loading;
+normal H.264 compression now keeps that fixture within the unchanged 5000000-byte cap. Its canvas,
+48-frame source length and 24 fps rate were not reduced, and no memory floor was relaxed.
+**Silent video and audio** combines that silent MP4 with one WAV under the same audio bounds.
+**Video with its own sound** instead requires exactly one AAC soundtrack in the MP4: 32000 Hz,
+mono or stereo, two seconds, starting at zero alongside the video. No separate WAV or pictures are
+accepted in that recipe. The soundtrack is `<Audio 1>` alongside `<Video 1>`; a separate WAV in the
+silent-video-and-audio recipe is also `<Audio 1>`. Only the first 0.917 s of either sound is used.
+The source MP4 keeps the same 5000000-byte cap, video dimensions, duration and frame rate.
+Each combination has its own receipt and measured admission profile: neither the silent-video pass
+nor the picture-and-audio pass enables either new combination. Create rechecks a selected video
+against the soundtrack policy when recipes change; a cached silent-video check is not a sound check.
+Run each explicitly through **Machine -> Feature checks -> Video -> Ref2VA VSA**, or the checks API
 (which queues the check alongside normal jobs):
 
 ```text
@@ -45,12 +72,36 @@ POST /api/feature-checks/check
 
 POST /api/feature-checks/check
 {"feature":"video-vsa","recipe":"two-pictures"}
+
+POST /api/feature-checks/check
+{"feature":"video-vsa","recipe":"picture-audio"}
+
+POST /api/feature-checks/check
+{"feature":"video-vsa","recipe":"video"}
+
+POST /api/feature-checks/check
+{"feature":"video-vsa","recipe":"video-audio"}
+
+POST /api/feature-checks/check
+{"feature":"video-vsa","recipe":"video-sound"}
 ```
 
 After a matching pass, `video-vsa` jobs accept `recipe: "text"` without an image, or
 `recipe: "two-pictures"` with `image` and `extra_image` (named `<Picture 1>` and `<Picture 2>`).
+`recipe: "picture-audio"` takes `image` and `audio` (named `<Picture 1>` and `<Audio 1>`).
+`recipe: "video"` takes only `video` (named `<Video 1>`), without pictures or audio references.
+`recipe: "video-audio"` takes `video` (silent) and `audio` (bounded WAV).
+`recipe: "video-sound"` takes only `video`, including its bounded AAC soundtrack; the recipe
+selects video sound explicitly, not an unrestricted renderer flag.
 Omitting `recipe` preserves existing one-picture jobs. The new input recipes do not yet accept longer clips
-or sequences. Video/audio references, extra LoRAs and higher-resolution VSA remain outside this batch.
+or sequences. Video outside these bounded MP4 recipes, audio outside their bounded WAV/AAC
+recipe, extra LoRAs and higher-resolution
+VSA remain outside this batch. Reference content stays dense under VSA; a picture-only pass never
+establishes the memory fit of video or audio references.
+Reference inspection uses `POST /api/video-vsa/reference` with `{"path":"uploads/reference.mp4","kind":"video"}`;
+add `"video_sound":true` only for the soundtrack recipe. A silent recipe refuses an audio stream rather
+than silently dropping it. For WAV inspection use `{"path":"uploads/reference.wav","kind":"audio"}`.
+These inspect only; they neither convert media nor qualify a recipe. CPU picture resizing remains explicit.
 **Sharp Spec** stays FastH3-specific, not a renamed VSA recipe. The VSA long-take card uses the existing
 up-to-60-second chain, not a single long generation or a claim of seamless continuity.
 
@@ -73,6 +124,38 @@ qualification and saved its own receipt. Its two inputs were the baker fixture a
 this is not a test of identity separation between different people or broader multi-reference fidelity.
 Both new input recipes remain bounded to 864x480, 22 frames and four passes. No higher-memory recipe
 was tested in this batch.
+
+The separately queued picture-and-audio check (`1115-130037-0b412b`, 2026-11-15) passed at
+864x480, 22 frames and four passes, with a matching independent receipt. The saved workflow and
+renderer log show one picture and one audio reference; supervision recorded 272 samples with no
+refused sample. The reference was the first two seconds of the pinned baker sample's sound,
+prepared as PCM16 WAV; only 22/24 seconds conditioned the output. The real Feature checks page
+showed the separate check and qualified status, and Create showed the bounded WAV form and
+duration warning. No listening comparison, voice-likeness assessment, video-reference test or
+longer audio-reference qualification was performed. Existing input-recipe passes were retained.
+
+The separately queued silent-video check (`1115-152022-5277eb`, 2026-11-15) passed at
+864x480, 22 frames and four passes, saving its own receipt. The source was a 118065-byte,
+512x288 silent H.264 MP4 with 48 frames at 24 fps; only its first 22 frames conditioned
+the output. The renderer recorded zero pictures, one video reference and four forwards.
+Its reported generation time was 55.6 seconds; the supervised process took 217.266 seconds,
+excluding later model hashing. Across 863 supervision samples there was no refused sample:
+minimum host availability was 6584 MiB, commit headroom 20151 MiB and dedicated GPU
+availability 3388 MiB, above the unchanged 2048 MiB dedicated reserve. The temporary
+reference was removed, the queue returned idle and existing recipe receipts were retained.
+This establishes bounded execution only, not motion fidelity, longer reference conditioning
+or video-sound support. Generated audio quality remains unresolved.
+
+On 2026-11-16 the remaining bounded video/WAV and video-sound recipes were implemented, including
+their explicit Feature checks entries and Studio workflow controls. They have **not** been run or
+qualified in this implementation batch. Regression cases were added but no tests or renders were run,
+at the user's request to leave more memory for qualification outside VS Code.
+To check locally: restart the existing native Studio normally, reload its browser page, close VS Code
+and other unnecessary memory consumers, then open **Machine -> Feature checks -> Video ->
+MiniMax H3 Ref2VA VSA**. Run **Check silent video and audio** and **Check video with its own sound**
+one at a time. Stop on a safety refusal; do not lower floors to obtain a pass. Existing recipe results
+remain dated evidence, not new passes. These checks use the pinned bundled baker media and do not
+need custom uploads. An execution pass does not resolve the known generated-audio issue.
 
 On review, the two-picture clip looked good to the viewer, showing the man in the bakery, but again
 contained unwanted foreign-language-like speech (language unverified). Its saved prompt was:
@@ -103,7 +186,13 @@ LoRAs, canvas and passes remain separate and are not sent to this recipe. In ste
 still/scout from the Library. **Make scouts in Image** opens the normal image form without queuing a render;
 **animate this**, Home's **animate** and the Library's **use** hand the chosen picture to your selected video backend.
 Making pictures keeps that backend selection. Supported H3 still treats its chosen picture as a first frame;
-VSA treats it only as a reference. Explicit first/last-frame and audio-reference actions stay on supported H3.
+VSA treats it only as a reference. Explicit first/last-frame actions stay on supported H3.
+Existing **reference sound** actions still choose supported H3; the Library offers a separate
+**VSA reference sound** action for WAV files. Library MP4s have **VSA video reference** and
+**VSA video + sound** actions. These open Create and inspect an already bounded source without
+rendering, converting it or changing its original. Create's media fields also offer a Library chooser
+and **Check reference again**. An arbitrary finished clip will usually need an explicitly prepared
+bounded copy before it fits these recipes.
 
 An oversized VSA picture is not silently resized or sent to the queue. **Create resized reference copy** explicitly
 makes a PNG in uploads, preserving the aspect ratio within 512x288, without cropping, upscaling or changing the
@@ -112,11 +201,15 @@ writing; adding `"resize":true` makes the copy with a 30-second tool timeout. Ne
 The Render step stays disabled until the selected picture has been checked and fits the recipe.
 Finished VSA clips/sequences use the normal Editor/download actions, can open their Library processing actions,
 and can be chosen for a soundtrack in Music. Those existing features retain their own prerequisites and guards.
-In Production/Slate, a shot can explicitly choose **VSA reference** under **Roll camera**.
-Its separate Library path is saved on the shot; prepare an oversized picture in Create first.
+In Production/Slate, a shot can explicitly choose **VSA reference** under **Roll camera**, then choose
+any registered **VSA input recipe**. Its separate Library paths and reference descriptions are saved
+on the shot; inspect references and prepare oversized picture copies in Create first.
 The film must use 480p and 16:9. Duration (including music-bar slots) keeps the model-valid frame count;
-the quality preset becomes the fixed four-pass recipe. Extra LoRAs, Drama 3 voice references and previs clips
-are refused, not dropped. VSA takes stay attached to the film with their backend, seed and actual recipe,
+all recipes except one picture require exactly 22 output frames (0.917 s); an incompatible shot or bar
+slot is refused, not silently shortened. The quality preset becomes the fixed four-pass recipe.
+Extra LoRAs, automatic Drama 3 voice references and automatic previs clips are refused, not dropped;
+video and audio references use the explicit bounded VSA fields instead.
+VSA takes stay attached to the film with their backend, seed and actual recipe,
 and use the same take review and Editor delivery. Existing text, first-frame, previous-shot and cast-still
 modes keep supported H3; none are silently converted to VSA.
 Importing a finished clip as a Slate take is also available with Windows qualification enabled: it copies media,
@@ -124,7 +217,10 @@ not a model render. The existing Studio-folder, hidden-file and remote-media res
 The desktop supervisor uses the UI environment's `pythonw.exe` to avoid a venv console redirector window;
 the app's PowerShell entry point retains console Python and the supervisor's hidden process ownership.
 The simple Production board likewise offers **a VSA reference** in each segment's **Opens on**.
-It saves a separate picture path, requires the 864x480 output preset and refuses project LoRAs. The normal
+It offers the same recipe chooser and separate reference paths/descriptions, requires the 864x480
+output preset and refuses project LoRAs. Only inputs belonging to the selected recipe reach the queue
+or prompt composer; supported H3's saved references are not reused. Set non-picture recipes to 22
+output frames; the queue checks their independent evidence and exact bounds. The normal
 segment queue and Editor handoff retain the resulting clip; text, image and previous-segment modes are unchanged.
 Only finished segments can be sent to the Editor; queued/running segments cannot be submitted twice, and
 cancelled segments are eligible for the board's batch retry. Board and Slate handoffs measure the actual

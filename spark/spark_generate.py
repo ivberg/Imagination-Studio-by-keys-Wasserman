@@ -546,7 +546,7 @@ def probe_media(path) -> dict:
     None, and ``seconds``."""
 
     done = subprocess.run([_tool("ffprobe"), "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, timeout=10)
     if done.returncode:
         sys.exit(f"cannot read {path}: {done.stderr.strip() or 'not a media file'}")
     data = json.loads(done.stdout)
@@ -616,11 +616,11 @@ def prepared_video(path, size: tuple[int, int], limit: int, folder: Path) -> tup
     done = subprocess.run([_tool("ffmpeg"), "-v", "error", "-y", "-i", str(path), "-map", "0:v:0", "-an", "-vf",
                            f"fps={FPS},scale={size[0]}:{size[1]}:flags=lanczos,setsar=1", "-frames:v", str(limit),
                            "-c:v", "libx264rgb", "-qp", "0", "-preset", "veryfast", "-pix_fmt", "rgb24", str(target)],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, timeout=120)
     if done.returncode or not target.is_file():
         sys.exit(f"cannot read frames from {path}: {done.stderr.strip()}")
     count = subprocess.run([_tool("ffprobe"), "-v", "error", "-select_streams", "v:0", "-count_frames", "-show_entries",
-                            "stream=nb_read_frames", "-of", "csv=p=0", str(target)], capture_output=True, text=True).stdout.strip()
+                            "stream=nb_read_frames", "-of", "csv=p=0", str(target)], capture_output=True, text=True, timeout=30).stdout.strip()
     frames = int(count) if count.isdigit() else 0
     if frames < 22:
         sys.exit(f"cannot read frames from {path}: {frames} frames at {FPS} a second, and a reference video needs 22")
@@ -632,7 +632,8 @@ def prepared_sound(path, seconds: float, folder: Path) -> Path:
 
     target = folder / f"sound_{uuid.uuid4().hex[:8]}.wav"
     done = subprocess.run([_tool("ffmpeg"), "-v", "error", "-y", "-i", str(path), "-map", "0:a:0", "-vn", "-ac", "2", "-ar",
-                           str(AUDIO_RATE), "-t", f"{seconds:.6f}", "-c:a", "pcm_f32le", str(target)], capture_output=True, text=True)
+                           str(AUDIO_RATE), "-t", f"{seconds:.6f}", "-c:a", "pcm_f32le", str(target)],
+                          capture_output=True, text=True, timeout=120)
     if done.returncode or not target.is_file() or target.stat().st_size < 1024:
         sys.exit(f"cannot read sound from {path}: {done.stderr.strip()}")
     return target
@@ -1511,7 +1512,7 @@ def main() -> None:
     v.add_argument("--ref-mode", choices=("turbo", "full", "vsa"), default="full",
                    help="full: 20 steps; turbo: the bf16 model with LightX2V's 4-pass adapter; "
                         "vsa: supervised native Windows recipe only")
-    v.add_argument("--vsa-recipe", choices=("picture", "text", "two-pictures"), default="picture",
+    v.add_argument("--vsa-recipe", choices=("picture", "text", "two-pictures", "picture-audio", "video", "video-audio", "video-sound"), default="picture",
                    help="input recipe for the supervised Windows VSA backend")
     v.add_argument("--ref-size", choices=("match", "max"), default="match",
                    help="match: references scaled down to the clip's pixel area (what the adapter was trained with); "

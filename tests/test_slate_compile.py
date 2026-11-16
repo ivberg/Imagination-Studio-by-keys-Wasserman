@@ -81,6 +81,36 @@ def test_vsa_preflight_failure_is_explicit_and_never_claims_the_shot_fits(monkey
     compiled = slate.compile_shot(project, "shot-1")
     assert not compiled["memory"]["fits"] and compiled["memory"]["reason"] == "Resize a copy explicitly"
 
+
+@pytest.mark.parametrize("recipe", ["text", "two-pictures", "picture-audio", "video", "video-audio", "video-sound"])
+def test_vsa_shot_uses_selected_recipe_and_its_own_admission(monkeypatch, recipe):
+    import windows_video_vsa as vsa
+    monkeypatch.setattr(vsa.windows_cuda, "native_os", lambda: True)
+    monkeypatch.setattr(vsa, "require", vsa.parameters)
+    asked = []
+    def memory(**kwargs):
+        asked.append(kwargs)
+        return {"fits": True, "reason": ""}
+    monkeypatch.setattr(vsa, "memory_fit", memory)
+    project = film()
+    shot = project["scenes"][0]["shots"][0]
+    shot["spec"]["durationSec"] = 22 / 24
+    shot["tf"].update(start="vsa", vsa_recipe=recipe, vsa_image="uploads/one.png",
+                      vsa_extra_image="uploads/two.png", vsa_video="uploads/clip.mp4",
+                      vsa_audio="uploads/sound.wav", vsa_video_note="The bakery",
+                      vsa_audio_note="Bakery sounds")
+    compiled = slate.compile_shot(project, "shot-1")
+    plan = compiled["plan"]
+    assert plan["recipe"] == recipe and plan["frames"] == 22 and compiled["memory"]["fits"]
+    assert asked == [{"frames": 22, "recipe": recipe}]
+    assert ("video" in plan) == (recipe in vsa.VIDEO_RECIPES)
+    assert ("audio" in plan) == (recipe in vsa.AUDIO_RECIPES)
+    assert ("image" in plan) == (recipe in ("two-pictures", "picture-audio"))
+    assert ("extra_image" in plan) == (recipe == "two-pictures")
+    assert ("<Picture 1>" in compiled["prompt"]) == ("image" in plan)
+    assert ("<Video 1>" in compiled["prompt"]) == ("video" in plan)
+    assert ("<Audio 1>" in compiled["prompt"]) == (recipe in (*vsa.AUDIO_RECIPES, "video-sound"))
+
 def test_a_compiled_prompt_forbids_nothing_by_name():
     """Slate's own words (a locked camera, a shot without lines) say what is there, so the negation check has nothing
     to list in a prompt compiled from a clean shot, with none of the app's sentences passed over."""

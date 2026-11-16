@@ -487,6 +487,8 @@ def attach(server):
         title = "Check " + CHECKS[kind].title
         if kind == vsa.KIND and params.get("sweep"):
             title += " (automatic clip lengths)"
+        elif kind == vsa.KIND and params.get("recipe", "picture") != "picture":
+            title += " (" + vsa.RECIPES[params["recipe"]] + ")"
         elif kind == vsa.KIND and params.get("frames", vsa.FRAMES) != vsa.FRAMES:
             title += f" ({params['frames']} frames, calibration only)"
         return server.enqueue("qualification", title, params)

@@ -720,6 +720,20 @@ def test_vsa_uses_the_shared_take_sheet_without_supported_recipes_or_estimates()
     assert out["step"] == 4 and out["clicks"] == out["blockedClicks"] == 1
 
 
+def test_vsa_take_sheet_distinguishes_soundtrack_from_separate_wav():
+    out = run("""
+      C.videoBackend="vsa";C.step=1;S.windows_vsa={};
+      globalThis.VSA={recipe:"video-sound",frames:22,mode:"single",videoReady:true,videoSound:true};
+      out.sound=text(takeSheet());
+      VSA.recipe="video-audio";VSA.videoSound=false;VSA.audioReady=true;
+      out.wav=text(takeSheet());
+      VSA.recipe="video-sound";out.stale=text(takeSheet());
+    """)
+    assert "one video with its sound" in out["sound"] and "<Audio 1>" in out["sound"]
+    assert "one silent video and WAV" in out["wav"] and "Reference audio" in out["wav"]
+    assert "<Audio 1>" not in out["stale"] and "check in step 2" in out["stale"]
+
+
 def test_the_chip_names_the_card_and_a_spark_stays_a_spark():
     out = run("""out.spark = platName(); out.sparkCard = cardFace();
       S.platform_label = "DGX SPARK · CUDA · H3-CUDA";

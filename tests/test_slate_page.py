@@ -78,6 +78,19 @@ def test_vsa_render_refusal_does_not_queue_a_take():
     assert got == {"error": "Resize first", "queued": False, "takes": 0}
 
 
+def test_vsa_soundtrack_take_preserves_selected_recipe_and_bounded_input():
+    got = run("""
+      SL.p=film();const scene={id:"scene",name:"Scene"},shot={id:"shot",takes:[],tf:{h3:"",h3Auto:true}};
+      const plan={recipe:"video-sound",video:"uploads/reference.mp4",frames:22,seed:0};
+      answers["/api/slate/compile"]={kind:"video-vsa",prompt:"Reference <Video 1> and <Audio 1>.",plan,memory:{fits:true}};
+      answers["/api/jobs"]={id:"soundtrack",params:plan};
+      await slRender(scene,shot);out.settings=shot.takes[0].settings;out.params=calls.find(c=>c[0]==="/api/jobs")[1].params;
+    """)
+    assert got["settings"]["recipe"] == "video-sound"
+    assert got["params"] == {"recipe": "video-sound", "video": "uploads/reference.mp4",
+                              "frames": 22, "seed": 0, "prompt": "Reference <Video 1> and <Audio 1>."}
+
+
 def test_slate_editor_handoff_uses_shared_checked_delivery_and_surfaces_failure():
     got = run("""
       SL.p=film(); SL.p.scenes=[{shots:[{takes:[{mediaPath:"renders/take.mp4",rating:"circled"}]}]}];

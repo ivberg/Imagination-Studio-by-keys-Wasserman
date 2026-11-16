@@ -386,23 +386,32 @@ function takeRecipes() { const final = UPSCALED["720p"] && S.presets[UPSCALED["7
   ].filter(Boolean); }
 function takeSheet() {
   const video = C.goes === "video", vsa = video && C.videoBackend === "vsa" && !!S.windows_vsa, est = el("div", { class: "note", style: "margin:0" });
+  const videoReference = vsa && ["video", "video-audio", "video-sound"].includes(VSA.recipe);
+  const videoReady = videoReference && VSA.videoReady && !VSA.videoBusy && !VSA.videoError &&
+    VSA.videoSound === (VSA.recipe === "video-sound");
   const row = (k, v) => el("div", { class: "kv", style: "padding:9px 0;border-bottom:1px solid var(--line)" }, el("span", {}, k), el("b", { style: "text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:62%" }, v));
   const out = vsa ? { size: [864, 480] } : output() || { label: "" }, size = out.size ? out.size.join(" × ") : "";
-  const startWord = vsa ? VSA.recipe === "text" ? "text only" : VSA.recipe === "two-pictures" ? "two reference pictures" : "one reference picture" : { text: "text only", scout: "a scout image", own: "your picture", refs: "references" }[C.start];
+  const startWord = vsa ? VSA.recipe === "text" ? "text only" : VSA.recipe === "two-pictures" ? "two reference pictures" :
+    VSA.recipe === "picture-audio" ? "one picture and audio" : VSA.recipe === "video-sound" ? "one video with its sound" :
+    VSA.recipe === "video-audio" ? "one silent video and WAV" : VSA.recipe === "video" ? "one silent reference video" :
+    "one reference picture" : { text: "text only", scout: "a scout image", own: "your picture", refs: "references" }[C.start];
   const roll = () => { if (C.step !== 4) { C.step = 4; render(); window.scrollTo({ top: 0, behavior: "smooth" }); return; } const b = $("#view section.card button.hot"); if (b && !b.disabled) b.click(); else toast("Finish the steps marked on the left first"); };
   if (video && !vsa && !isLong()) showEstimate(C, est);
   return el("div", { class: "panel stack", style: "position:sticky;top:calc(var(--head) + var(--sub) + 18px);gap:16px" },
-    el("div", { class: "kv" }, el("span", { class: "eyebrow" }, "Take sheet"), el("span", {}, "step " + (C.step + 1) + " of 5 · " + (vsa && C.step === 1 ? VSA.recipe === "text" ? "Text only" : "Reference picture" : STEP_NAMES[C.step]))),
+    el("div", { class: "kv" }, el("span", { class: "eyebrow" }, "Take sheet"), el("span", {}, "step " + (C.step + 1) + " of 5 · " + (vsa && C.step === 1 ? VSA.recipe === "text" ? "Text only" : videoReference ? "Reference video" : "Reference picture" : STEP_NAMES[C.step]))),
     video && !vsa && !isRef() ? el("div", { class: "stack", style: "gap:8px" }, takeRecipes().map(r => el("button", { class: "recipe-row" + (r.on() ? " on" : ""), onclick: r.set }, el("b", {}, r.title), el("span", {}, r.says)))) : null,
     el("div", {}, row("Making", video ? (vsa ? VSA.mode === "sequence" ? "a sequence with sound" : "a clip with sound" : isLong() ? "a long take" : "a clip with sound") : C.goes === "image" ? "stills" : "a picture edit"),
       video ? row("Starts from", startWord) : null, video ? row("Engine", vsa ? "H3 Ref2VA VSA · 4 passes" : (C.engine === "fasth3" ? "FastH3 · " + (customOn() ? C.steps : C.passes) + " passes" : "MiniMax H3")) : null,
       video ? row("Size", size || out.label) : row("Size", C.imageSize.replace("x", " × ")), video ? row("Length", vsa ? VSA.mode === "sequence" ? VSA.sequenceSeconds + " s sequence" : exact(Number(VSA.frames)) : isLong() ? (S.long[C.seconds] || C.seconds + " s") : exact(framesOf(C))) : null,
       vsa && VSA.mode === "sequence" ? row("Per shot", exact(Number(VSA.frames))) : null,
       row("Seed", String(C.seed)), !vsa && lorasOf(C).length ? row("Looks", lorasOf(C).length + " LoRA" + (lorasOf(C).length > 1 ? "s" : "")) : null,
-      vsa ? row(VSA.recipe === "two-pictures" ? "Reference pictures" : "Reference picture", VSA.recipe === "text" ? "not used" :
+      videoReference ? row("Reference video", videoReady ?
+        "22 frames used of 48" : "check in step 2") : vsa ? row(VSA.recipe === "two-pictures" ? "Reference pictures" : "Reference picture", VSA.recipe === "text" ? "not used" :
         VSA.recipe === "two-pictures" ? (typeof vsaReferenceReady === "function" && vsaReferenceReady() ? "both selected" : "check both in step 2") :
         !VSA.image ? "needed in step 2" : VSA.referenceBusy ? "checking" :
-        VSA.reference && VSA.reference.path === VSA.image && VSA.reference.ready && !VSA.referenceError ? "selected" : "check / resize in step 2") : isRef() ? row("References", refCount() + " of " + (S.reference_total || 12)) : null),
+        VSA.reference && VSA.reference.path === VSA.image && VSA.reference.ready && !VSA.referenceError ? "selected" : "check / resize in step 2") : isRef() ? row("References", refCount() + " of " + (S.reference_total || 12)) : null,
+      vsa && ["picture-audio", "video-audio"].includes(VSA.recipe) ? row("Reference audio", VSA.audioReady && !VSA.audioBusy && !VSA.audioError ? "0.917 s used of 2 s" : "check in step 2") : null,
+      vsa && VSA.recipe === "video-sound" ? row("Video sound", videoReady ? "<Audio 1> · 0.917 s used" : "check in step 2") : null),
     est,
     video ? el("button", { class: "hot", style: "width:100%", onclick: roll }, C.step === 4 ? "Roll this take" : "Go to Render →") : null,
     el("div", { class: "note", style: "margin:0;font-size:13.5px" }, vsa ? "VSA input recipe and length controls stay on the left. Any pictures are references, not first-frame anchors." : "The full controls stay on the left. A recipe only sets engine, passes and size."));

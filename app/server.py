@@ -3243,9 +3243,25 @@ def vsa_reference(body: dict) -> dict:
 
     if not (WINDOWS or WIN32):
         raise HTTPException(501, "Ref2VA VSA is a native Windows recipe.")
-    if set(body) - {"path", "resize"} or not isinstance(body.get("path"), str) or type(body.get("resize", False)) is not bool:
-        raise HTTPException(400, "choose a Studio picture and an optional boolean resize action")
+    if (set(body) - {"path", "resize", "kind", "video_sound"} or not isinstance(body.get("path"), str)
+            or type(body.get("resize", False)) is not bool or type(body.get("video_sound", False)) is not bool
+            or body.get("video_sound", False) and body.get("kind") != "video"
+            or body.get("kind", "picture") not in ("picture", "audio", "video")):
+        raise HTTPException(400, "choose a Studio reference kind and path; resize and video_sound must be booleans, and video_sound applies only to video")
     source = inside(body["path"])
+    if body.get("kind") in ("audio", "video"):
+        if body.get("resize"):
+            raise HTTPException(400, "Media must already match its bounded reference recipe; resizing is for pictures.")
+        import windows_video_vsa
+        try:
+            details = {**windows_video_vsa.require_video(source, sound=body.get("video_sound", False)),
+                       "video_sound": body.get("video_sound", False)} if body["kind"] == "video" else {}
+            if body["kind"] == "audio":
+                windows_video_vsa.require_audio(source)
+        except (OSError, RuntimeError, ValueError) as error:
+            raise HTTPException(400, str(error)) from error
+        return {"path": relative(source), "ready": True, "source_seconds": 2,
+                "effective_seconds": windows_video_vsa.FRAMES / 24, **details}
     if not source.is_file() or source.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
         raise HTTPException(400, "choose a picture in the studio's folder (png, jpg or webp)")
     try:

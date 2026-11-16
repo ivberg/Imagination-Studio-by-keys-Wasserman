@@ -163,11 +163,13 @@ const C = { step: 0, mode: "scout", videoBackend: "standard", preset: "draft", q
   dialogue: [], soundscape: "", music: "N/A", imagePrompt: "", image: null, scoutJob: null, prompt: "", job: null, count: 4, imageSize: "1344x768", imageJob: null, imageModel: "qwen", beats: "", cw: 864, ch: 480, steps: "", loras: [], textEncoder: "", lastImage: null, frames: null, retake: false, negations: [], negFor: null };
 const VSA = { image: "", reference: null, referenceBusy: false, referenceError: "", referenceRequest: 0, library: false,
   frames: 22, mode: "single", sequenceSeconds: 60, job: null, checkState: "", recipe: "picture",
+  audio: "", audioReady: false, audioBusy: false, audioError: "", audioRequest: 0, audioNote: "",
+  video: "", videoReady: false, videoBusy: false, videoError: "", videoRequest: 0, videoNote: "", videoSound: false,
   second: { image: "", reference: null, referenceBusy: false, referenceError: "", referenceRequest: 0, library: false } };
 const isVsa = () => C.goes === "video" && C.videoBackend === "vsa" && !!(S && S.windows_vsa);
 function useVideoPicture(path) {
   const vsa = C.videoBackend === "vsa" && S && S.windows_vsa;
-  if (vsa && VSA.recipe === "text") VSA.recipe = "picture";
+  if (vsa && (VSA.recipe === "text" || vsaHasVideo())) VSA.recipe = "picture";
   startCreate(vsa ? { goes: "video", videoBackend: "vsa" } : { goes: "video", start: "own", image: path }, 1);
   if (vsa) return vsaSelectImage(path);
 }
@@ -746,15 +748,42 @@ function vsaCheckPanel() {
     el("button", { class: "small fit", onclick: () => openFeatureCheck("video-vsa") }, "VSA feature checks"),
     el("div", { class: "note" }, "Saved results and explicit checks are in Machine > Feature checks > Video. Technical qualification does not verify soundscape adherence; baker tests still produced unwanted speech."));
 }
+const vsaHasVideo = (recipe = VSA.recipe) => ["video", "video-audio", "video-sound"].includes(recipe);
+const vsaHasAudio = (recipe = VSA.recipe) => ["picture-audio", "video-audio"].includes(recipe);
+const vsaPictureCount = recipe => recipe === "text" || vsaHasVideo(recipe) ? 0 : recipe === "two-pictures" ? 2 : 1;
+const vsaRecipeOptions = () => ({ picture: "One picture", text: "Text only", "two-pictures": "Two pictures",
+  "picture-audio": "Picture and audio", video: "Silent video reference",
+  "video-audio": "Silent video and audio", "video-sound": "Video with its own sound" });
+const vsaReferenceFields = (recipe, videoNote, audioNote) => ({
+  ...(vsaHasVideo(recipe) ? { video_subjects: [videoNote || ""] } : {}),
+  ...(vsaHasAudio(recipe) ? { audio_notes: [audioNote || ""] } : {}),
+  ...(recipe === "video-sound" ? { video_sound: true } : {}) });
+const vsaInputPaths = (recipe, inputs) => ({
+  ...(vsaPictureCount(recipe) ? { image: inputs.image || "" } : {}),
+  ...(recipe === "two-pictures" ? { extra_image: inputs.extra_image || "" } : {}),
+  ...(vsaHasVideo(recipe) ? { video: inputs.video || "" } : {}),
+  ...(vsaHasAudio(recipe) ? { audio: inputs.audio || "" } : {}),
+  ...(recipe !== "picture" ? { recipe } : {}) });
+function vsaRecipeChanged() {
+  if (VSA.recipe !== "picture") { VSA.frames = 22; VSA.mode = "single"; }
+  ++VSA.videoRequest; VSA.videoBusy = false;
+  render();
+}
+function useVsaMedia(path, recipe) {
+  if (!S || !S.windows_vsa) return toast("VSA is a native Windows backend.");
+  VSA.recipe = recipe; vsaRecipeChanged();
+  C.prompt = "";
+  startCreate({ goes: "video", videoBackend: "vsa" }, 1);
+  return vsaSelectMedia(path, vsaHasVideo(recipe) ? "video" : "audio");
+}
 function vsaControls() {
   const found = vsaLength();
   const sequence = VSA.mode === "sequence", seconds = Number(VSA.sequenceSeconds);
   const invalidDuration = sequence && (!Number.isInteger(seconds) || seconds < 1 || seconds > 60);
   return el("div", { class: "stack", "data-backend": "video-vsa" },
     el("h2", {}, "MiniMax H3 Ref2VA VSA"),
-    field("Input recipe", choice(VSA, "recipe", { picture: ["One picture", "existing measured recipe"],
-      text: ["Text only", "separate 22-frame qualification"], "two-pictures": ["Two pictures", "separate 22-frame qualification"] },
-      () => { if (VSA.recipe !== "picture") { VSA.frames = 22; VSA.mode = "single"; } render(); })),
+    field("Input recipe", choice(VSA, "recipe", Object.fromEntries(Object.entries(vsaRecipeOptions()).map(([key, title]) =>
+      [key, [title, key === "picture" ? "existing measured recipe" : "separate 22-frame execution check"]])), vsaRecipeChanged)),
     VSA.recipe === "picture" ? choice(VSA, "mode", { single: ["Single clip", "one model-length clip"],
       sequence: ["Sequence up to 60 seconds", "short shots with potentially visible joins"] }, vsaModeChanged)
       : el("div", { class: "note" }, "This input recipe is currently bounded to a single 22-frame clip (0.917 s)."),
@@ -772,13 +801,82 @@ function vsaControls() {
       "Visible picture and sound joins are expected. This can take a long time; the sequence has a two-hour deadline. " +
       "A failure or cancellation stops the sequence; completed shots stay in its folder.") : null,
     field("Seed", bind(C, "seed", el("input", { type: "number", min: 0, max: 4294967295 }))),
-    el("div", { class: "note" }, "Each picture is a reference, not a guaranteed first frame. Last frames, extra LoRAs, reference video/audio and supported H3's canvas/pass controls remain outside these recipes. Their settings are kept separately and are not sent to VSA."),
+    el("div", { class: "note" }, "Each picture or video is a reference, not a guaranteed first frame. WAV audio needs a picture or silent video; a video's own sound has a separate recipe and check. Only the first 0.917 s of reference media is used. Last frames, extra LoRAs and supported H3's canvas/pass controls remain outside these recipes. Their settings are kept separately and are not sent to VSA."),
     el("div", { class: "note" }, "This is a separate low-memory backend, not a replacement for the supported H3 engine. MiniMax H3 licence and territory restrictions apply."));
 }
 const vsaPictureReady = ref => !!(ref.image && ref.reference && ref.reference.path === ref.image &&
   ref.reference.ready && !ref.referenceBusy && !ref.referenceError);
-const vsaReferenceReady = () => VSA.recipe === "text" || vsaPictureReady(VSA) &&
-  (VSA.recipe !== "two-pictures" || vsaPictureReady(VSA.second));
+const vsaVideoReady = () => !!VSA.video && VSA.videoReady && !VSA.videoBusy && !VSA.videoError &&
+  VSA.videoSound === (VSA.recipe === "video-sound");
+const vsaReferenceReady = () => VSA.recipe === "text" ||
+  (vsaHasVideo() ? vsaVideoReady() : vsaPictureReady(VSA) &&
+    (VSA.recipe !== "two-pictures" || vsaPictureReady(VSA.second))) &&
+  (!vsaHasAudio() || !!VSA.audio && VSA.audioReady && !VSA.audioBusy && !VSA.audioError);
+async function vsaSelectMedia(path, kind) {
+  const request = ++VSA[kind + "Request"];
+  const sound = kind === "video" && VSA.recipe === "video-sound";
+  VSA[kind] = path; VSA[kind + "Ready"] = false; VSA[kind + "Busy"] = true; VSA[kind + "Error"] = ""; render();
+  try {
+    const result = await api("/api/video-vsa/reference", { path, kind, ...(sound ? { video_sound: true } : {}) });
+    if (!result || result.path !== path || result.ready !== true || result.source_seconds !== 2 ||
+        result.effective_seconds !== 22 / 24 || kind === "video" &&
+        (!Number.isInteger(result.width) || !Number.isInteger(result.height) ||
+         result.width < 32 || result.width > 512 || result.height < 32 || result.height > 288 ||
+         result.width % 32 || result.height % 32 || result.frames !== 48 || result.fps !== 24 ||
+         (result.video_sound === true) !== sound))
+      throw new Error("The " + kind + " check returned invalid recipe details.");
+    if (request === VSA[kind + "Request"]) {
+      VSA[kind + "Ready"] = true;
+      if (kind === "video") VSA.videoSound = sound;
+    }
+  } catch (e) {
+    if (request === VSA[kind + "Request"]) { VSA[kind + "Error"] = e.message; toast(e.message); }
+  } finally {
+    if (request === VSA[kind + "Request"]) { VSA[kind + "Busy"] = false; render(); }
+  }
+}
+const vsaSelectAudio = path => vsaSelectMedia(path, "audio");
+const vsaSelectVideo = path => vsaSelectMedia(path, "video");
+function vsaMediaReference(kind) {
+  const video = kind === "video", sound = video && VSA.recipe === "video-sound", tag = video ? "<Video 1>" : "<Audio 1>";
+  const upload = el("input", { type: "file", accept: video ? ".mp4,video/mp4" : ".wav,audio/wav", onchange: async () => {
+    if (!upload.files[0]) return;
+    const request = ++VSA[kind + "Request"];
+    VSA[kind + "Ready"] = false; VSA[kind + "Busy"] = true; VSA[kind + "Error"] = ""; render();
+    const data = new FormData(); data.append("file", upload.files[0]);
+    try {
+      const response = await fetch("/api/upload", { method: "POST", body: data }), result = await response.json();
+      if (!response.ok || !result.path) throw new Error(result.detail || result.error || "Reference upload failed.");
+      if (request === VSA[kind + "Request"]) await vsaSelectMedia(result.path, kind);
+    } catch (e) {
+      if (request === VSA[kind + "Request"]) { VSA[kind + "Busy"] = false; VSA[kind + "Error"] = e.message; toast(e.message); render(); }
+    }
+  } });
+  const library = el("details", {}, el("summary", {}, "Pick from the Library"),
+    el("div", { class: "note" }, "Only already bounded files are accepted; originals are not converted."));
+  library.addEventListener("toggle", () => {
+    if (!library.open || library.dataset.loaded) return;
+    library.dataset.loaded = "1";
+    api("/api/library").then(items => library.append(el("div", { class: "row" }, items.filter(item =>
+      video ? /\.mp4$/i.test(item.path) : /\.wav$/i.test(item.path)).map(item =>
+      el("button", { class: "small", onclick: () => vsaSelectMedia(item.path, kind) }, item.path)))))
+      .catch(e => { delete library.dataset.loaded; toast(e.message); });
+  });
+  return el("div", { class: "stack" }, el("h2", {}, video ? "Reference video" : "Reference audio"),
+    el("div", { class: "note" }, video ?
+      "One 2-second H.264 MP4: 48 frames at 24 fps, sides in multiples of 32 up to 512x288, at most 5000000 bytes. " +
+      (sound ? "Exactly one 32000 Hz mono/stereo AAC soundtrack, two seconds, is used as <Audio 1>. " : "No audio stream. ") +
+      "Only its first 22 frames (0.917 s) are used. This execution check does not qualify motion or voice fidelity or longer references. Use footage you have permission to use." :
+      "One 2-second PCM16 WAV at 32000 Hz, mono or stereo, at most 300000 bytes. Only the first 0.917 s is used by this 22-frame execution recipe. It does not qualify voice likeness, motion or longer references. Use audio you have permission to use."),
+    field(video ? sound ? "Upload reference MP4 with sound" : "Upload silent reference MP4" : "Upload reference WAV", upload), library,
+    VSA[kind] ? el(kind, { src: file(VSA[kind]), controls: true, preload: "metadata", ...(video && !sound ? { muted: true } : {}) }) : null,
+    VSA[kind + "Busy"] ? el("div", { role: "status" }, "Checking reference " + kind + "...") : null,
+    VSA[kind + "Error"] ? el("div", { class: "tip", role: "alert" }, VSA[kind + "Error"]) : null,
+    (video ? vsaVideoReady() : VSA.audioReady) ? el("div", { class: "note" }, "Ready as " + tag + (sound ? " and <Audio 1>" : "") + "; only its first 0.917 s will be used.") : null,
+    VSA[kind] ? el("button", { class: "small fit", disabled: VSA[kind + "Busy"], onclick: () => vsaSelectMedia(VSA[kind], kind) }, "Check reference again") : null,
+    field("What " + tag + " provides", bind(VSA, kind + "Note", el("input", { placeholder: video ? "Describe the person or scene to follow" : "Describe the sound or voice to follow" }))));
+}
+const vsaAudioReference = () => vsaMediaReference("audio");
 async function vsaSelectImage(path, resize = false, ref = VSA) {
   const request = ++ref.referenceRequest;
   ref.image = path; ref.reference = null; ref.referenceBusy = true; ref.referenceError = ""; render();
@@ -796,6 +894,8 @@ async function vsaSelectImage(path, resize = false, ref = VSA) {
 }
 function vsaReference(ref = VSA, ordinal = 1) {
   if (VSA.recipe === "text") return el("div", { class: "note" }, "Text-only VSA uses no reference picture. Write the scene, action and sound in the following steps.");
+  if (vsaHasVideo()) return el("div", { class: "stack" }, vsaMediaReference("video"),
+    vsaHasAudio() ? vsaAudioReference() : null);
   const upload = el("input", { type: "file", accept: "image/*", onchange: async () => {
     if (!upload.files[0]) return;
     const request = ++ref.referenceRequest;
@@ -835,6 +935,7 @@ function vsaReference(ref = VSA, ordinal = 1) {
     }).catch(e => grid.replaceChildren(el("div", { class: "tip", role: "alert" }, e.message)));
   }
   if (ref === VSA && VSA.recipe === "two-pictures") box.append(vsaReference(VSA.second, 2));
+  if (ref === VSA && VSA.recipe === "picture-audio") box.append(vsaAudioReference());
   return box;
 }
 function clipResultActions(path, soundtrack = false) {
@@ -855,14 +956,12 @@ function viewVsa() {
     el("div", { class: "note" }, found.scope + " Seed " + C.seed + (sequence ? `; ${seconds}-second sequence.` : "")),
     !found.available ? el("div", { class: "tip" }, found.why || S.windows_vsa.why) : null,
     !vsaReferenceReady() || !C.prompt.trim() ? el("div", { class: "tip" }, !vsaReferenceReady() ?
-      "Choose and check a reference picture in step 2; an oversized picture needs an explicit resized copy." : "Open step 4 to build or write the prompt.") : null,
+      "Choose and check this recipe's references in step 2; an oversized picture needs an explicit resized copy." : "Open step 4 to build or write the prompt.") : null,
     invalidDuration ? el("div", { class: "tip" }, "Choose a whole number of seconds from 1 to 60 in step 1.") : null,
     negNote(),
     el("button", { class: "hot fit", disabled: !found.available || !vsaReferenceReady() || !C.prompt.trim() || invalidDuration, onclick: async () => {
       try { const job = await api("/api/jobs", { kind: "video-vsa", title: sequence ? "VSA sequence" : "Ref2VA VSA",
-        params: { ...(VSA.recipe === "text" ? {} : { image: VSA.image }),
-          ...(VSA.recipe !== "picture" ? { recipe: VSA.recipe } : {}),
-          ...(VSA.recipe === "two-pictures" ? { extra_image: VSA.second.image } : {}),
+        params: { ...vsaInputPaths(VSA.recipe, { image: VSA.image, extra_image: VSA.second.image, audio: VSA.audio, video: VSA.video }),
           prompt: C.prompt, seed: Number(C.seed), frames: Number(VSA.frames),
           ...(sequence ? { sequence_seconds: seconds } : {}) } });
         VSA.job = job.id; await poll(); render();
@@ -884,7 +983,8 @@ function viewCreate() {
     body.append(picker);
     body.append(el("div", { class: "note" }, "Scene, action, camera, words, sound, seed and the reviewed prompt are shared. Each backend keeps its own picture and recipe settings. After switching, review the prompt; rebuild it to change between frame and reference wording."));
   }
-  const steps = el("div", { class: "steps" }, STEPS.map((name, i) => el("button", { class: i === C.step ? "on" : "", onclick: () => { C.step = i; render(); } }, i === 1 && referenced ? "2. " + (vsa ? "Reference picture" : refWord()) : name)));
+  const referenceWord = !referenced ? "" : vsa ? vsaHasVideo() ? "Reference video" : "Reference picture" : refWord();
+  const steps = el("div", { class: "steps" }, STEPS.map((name, i) => el("button", { class: i === C.step ? "on" : "", onclick: () => { C.step = i; render(); } }, i === 1 && referenced ? "2. " + referenceWord : name)));
   const next = el("div", { class: "row", style: "margin-top:14px" }, el("button", { class: "fit", disabled: C.step === 0, onclick: () => { C.step--; render(); } }, "Back"),
     el("span"), C.step === 3 && C.mode !== "image" ? null : clearButton("create-" + C.step, "Clear this step"), el("button", { class: "small fit", title: "Empty every prompt field of this clip: scene, action, camera, lines, sound, and the composed prompt. Pictures, clips and settings stay.", onclick: clearAllCreate }, "Clear all"),
     C.step < 4 ? el("button", { class: "primary fit", onclick: () => { C.step++; render(); } }, "Next") : null);
@@ -934,7 +1034,7 @@ function viewCreate() {
     put(body, el("h2", {}, "The shot"), goes,
       vsa ? null : el("label", {}, "The clip starts from"), vsa ? null : choice(C, "start", { text: ["Text only", "no first frame"], scout: ["A scout image", "make several with " + imageModels().map(m => m.label).join(" or ") + ", pick one"], own: ["Your own image", "upload a picture"],
         ...(S.ref2va ? { refs: S.ref_media ? ["References", "pictures, videos or audio: keep a face, a motion or a voice"] : ["Reference pictures", "keep a face or a thing, in a new scene"] } : {}) }, changed),
-      referenced ? el("div", { class: "note", style: "margin:8px 0" }, "You add them on the next screen: ", el("a", { href: "#", onclick: e => { e.preventDefault(); C.step = 1; render(); } }, "2. " + (vsa ? "Reference picture" : refWord())), ".") : null,
+      referenced ? el("div", { class: "note", style: "margin:8px 0" }, "You add them on the next screen: ", el("a", { href: "#", onclick: e => { e.preventDefault(); C.step = 1; render(); } }, "2. " + referenceWord), ".") : null,
       vsa ? vsaControls() : videoControls(() => { render(); }), vsa ? null : summary(est), picture,
       field("What happens to the characters inside the scene / clip", bind(C, "action", el("textarea", { placeholder: "He lifts the loaf with both hands, sets it down, looks at the camera and smiles." }))),
       field("Camera (optional)", bind(C, "camera", el("input", { placeholder: "The camera slowly pushes in throughout the single continuous shot." }))),
@@ -1023,8 +1123,10 @@ function viewCreate() {
     const area = bind(C, "prompt", el("textarea", { style: "min-height:260px;font-family:ui-monospace,monospace;font-size:13.5px" }));
     const again = async () => { try {
       const request = vsa ? { fields: { scene: C.scene, action: C.action, camera: C.camera, dialogue: C.dialogue.map(line => ({ ...line, subject: 1 })),
-          soundscape: C.soundscape, music: C.music }, first_frame: false, last_frame: false, frames: Number(VSA.frames),
-          seconds: Number(VSA.frames) / 24, references: VSA.recipe === "text" ? 0 : VSA.recipe === "two-pictures" ? 2 : 1,
+          soundscape: C.soundscape, music: C.music,
+          ...vsaReferenceFields(VSA.recipe, VSA.videoNote, VSA.audioNote) },
+          first_frame: false, last_frame: false, frames: Number(VSA.frames),
+          seconds: Number(VSA.frames) / 24, references: vsaPictureCount(VSA.recipe),
           referenced: VSA.recipe !== "text", loras: [] } :
         { fields: { ...C, motion: isRef() ? motionFields() : null }, first_frame: !noFrame(), last_frame: !!lastOf(), ...lengthOf(C), references: isRef() ? Math.max(C.refs.length, refMedia() ? 0 : 1) : 0, referenced: isRef(), loras: isRef() ? lorasOf(C) : [] };
       const r = await api("/api/compose", request); C.prompt = r.prompt; area.value = r.prompt; negShow(warned);
@@ -1083,7 +1185,9 @@ async function replaceTimeline(paths) {
   if (project === target) { tab = "Editor"; history.replaceState(null, "", "#Editor"); render(); }
 }
 async function composeSeg(seg, index) { const vsa = seg.start === "vsa", first = seg.start !== "text" && !vsa; const r = await api("/api/compose", { fields: { scene: seg.scene, action: seg.action, camera: seg.camera, soundscape: seg.soundscape, music: "N/A",
-  dialogue: seg.line ? [{ voice: seg.voice, text: seg.line, language: "English" }] : [] }, first_frame: first, ...(vsa ? {referenced:true,references:1,frames:framesOf(seg)} : {}) }); seg.prompt = r.prompt; }
+  dialogue: seg.line ? [{ voice: seg.voice, text: seg.line, language: "English" }] : [],
+  ...(vsa ? vsaReferenceFields(seg.vsaRecipe || "picture", seg.vsaVideoNote, seg.vsaAudioNote) : {}) },
+  first_frame: first, ...(vsa ? {referenced:seg.vsaRecipe !== "text",references:vsaPictureCount(seg.vsaRecipe || "picture"),frames:framesOf(seg)} : {}) }); seg.prompt = r.prompt; }
 async function generateSeg(index) { const seg = project.segments[index];
   if (segBusy(seg)) throw new Error("This segment is already queued or rendering.");
   SEG_QUEUING.add(seg);
@@ -1093,7 +1197,8 @@ async function generateSeg(index) { const seg = project.segments[index];
     const size = S.presets[project.preset]?.size;
     if (!size || size[0] !== 864 || size[1] !== 480) throw new Error("VSA requires the 864x480 output preset.");
     const j = await api("/api/jobs", {kind:"video-vsa",title:"Segment " + (index + 1) + ": " + (seg.title || ""),
-      params:{image:seg.vsaImage || "",prompt:seg.prompt,frames:framesOf(seg),seed:Number(seg.seed ?? 1)}});
+      params:{...vsaInputPaths(seg.vsaRecipe || "picture", {image:seg.vsaImage,extra_image:seg.vsaExtraImage,
+        video:seg.vsaVideo,audio:seg.vsaAudio}),prompt:seg.prompt,frames:framesOf(seg),seed:Number(seg.seed ?? 1)}});
     jobs.unshift(j);seg.job=j.id;seg.output="renders/" + j.id + "-vsa/video.mp4";return;
   }
   const params = { prompt: seg.prompt, preset: project.preset, quality: project.quality, ...lengthOf(seg), seed: Number(seg.seed || 1), ...(lorasOf(project).length ? { loras: lorasOf(project) } : {}), output: "projects/" + project.id + "/seg" + (index + 1) + "_" + Date.now() + ".mp4" };
@@ -1139,6 +1244,7 @@ function viewProduction() {
         el("button", { class: "fit", disabled: !project.segments.length, title: "Empty the scene, action, voice, line and soundscape of every segment. Titles, lengths and rendered clips stay.", onclick: clearSegments }, "Clear every segment's text"),
         CLEARED && CLEARED.key === "segments" ? el("button", { class: "fit", onclick: undoClear }, "Undo clear") : null, el("span")));
     project.segments.forEach((seg, i) => { const job = segJob(seg); const change = () => { seg.prompt = ""; saveProject(); };
+      if (seg.start === "vsa" && !seg.vsaRecipe) seg.vsaRecipe = "picture";
       put(box, el("div", { class: "seg", "data-clear": "segment-" + i }, el("div", { class: "seghead" }, el("b", {}, "Segment " + (i + 1)), job ? el("span", { class: "pill " + job.status }, job.status) : el("span", { class: "pill queued" }, seg.output ? "rendered" : "draft"),
           el("span", { style: "flex:1" }), clearButton("segment-" + i), el("button", { class: "small", disabled: segBusy(seg), onclick: async () => { try { await generateSeg(i); await saveProject(); await poll(); render(); } catch (e) { toast(e.message); } } }, seg.output ? "Render again" : "Render"),
           el("button", { class: "small", disabled: i === 0, onclick: () => { project.segments.splice(i - 1, 0, project.segments.splice(i, 1)[0]); saveProject(); render(); } }, "↑"),
@@ -1148,8 +1254,17 @@ function viewProduction() {
           field("Opens on", select(seg, "start", { text: "nothing (text to video)", previous: "the last frame of the segment before", image: "an image from the library", ...(S.windows_vsa ? {vsa:"a VSA reference (not a first frame)"} : {}) }, () => { change(); render(); })),
           el("div", { class: "fit", style: "width:90px" }, el("label", {}, "Seed"), bind(seg, "seed", el("input", { type: "number" }), saveProject))),
         seg.start === "image" ? keep(field("Image path (copy from the Library tab)", bind(seg, "image", el("input", { placeholder: "scouts/…/scout_s3.png" }), saveProject))) : null,
-        seg.start === "vsa" ? el("div", {}, keep(field("VSA reference path (prepare a copy in Create first)", bind(seg, "vsaImage", el("input", {placeholder:"uploads/reference.png"}), change))),
-          el("div", {class:"note"}, "One reference up to 512x288; 864x480, four passes, 24 fps. The project's quality is replaced by this recipe. Extra LoRAs are refused; this is not an exact first-frame anchor.")) : null,
+        seg.start === "vsa" ? el("div", {},
+          field("VSA input recipe", select(seg, "vsaRecipe", vsaRecipeOptions(), () => { change(); render(); })),
+          vsaPictureCount(seg.vsaRecipe || "picture") ? keep(field("VSA reference picture (prepare in Create first)", bind(seg, "vsaImage", el("input", {placeholder:"uploads/reference.png"}), change))) : null,
+          seg.vsaRecipe === "two-pictures" ? keep(field("Second VSA reference picture", bind(seg, "vsaExtraImage", el("input", {placeholder:"uploads/reference-2.png"}), change))) : null,
+          vsaHasVideo(seg.vsaRecipe || "picture") ? [
+            keep(field("Bounded VSA reference MP4", bind(seg, "vsaVideo", el("input", {placeholder:"uploads/reference.mp4"}), change))),
+            keep(field("What <Video 1> provides", bind(seg, "vsaVideoNote", el("input"), change)))] : null,
+          vsaHasAudio(seg.vsaRecipe || "picture") ? [
+            keep(field("Bounded VSA reference WAV", bind(seg, "vsaAudio", el("input", {placeholder:"uploads/reference.wav"}), change))),
+            keep(field("What <Audio 1> provides", bind(seg, "vsaAudioNote", el("input"), change)))] : null,
+          el("div", {class:"note"}, "864x480, four passes, 24 fps. All recipes except one picture require exactly 22 output frames and their own local feature check. Use Create to inspect bounded references; only the first 0.917 s of media is used. Video with its own sound uses <Audio 1>. Project quality is replaced; extra LoRAs are refused. References are not first-frame anchors.")) : null,
         field("Describe the scene / condition where it takes place", bind(seg, "scene", el("textarea", { style: "min-height:54px" }), change)), field("What happens to the characters inside the scene / clip", bind(seg, "action", el("textarea", { style: "min-height:54px" }), change)),
         el("div", { class: "row" }, field("Voice", bind(seg, "voice", el("input", { placeholder: "a warm female voice" }), change)), field("Spoken line (optional)", bind(seg, "line", el("input"), change))),
         field("Soundscape", bind(seg, "soundscape", el("input"), change)),
@@ -1266,6 +1381,8 @@ function libSoundTile(m, shown, picked) { const [what, room] = LIB_SOUND[m.sound
     el("div", { class: "cap" }, el("span", { style: "cursor:pointer;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap", title: m.path, onclick: () => { navigator.clipboard?.writeText(m.path); toast("Copied " + m.path); } }, m.path.split("/").pop())),
     el("div", { class: "cap", style: "padding-top:0;justify-content:flex-end;flex-wrap:wrap" },
       el("button", { class: "small", title: "Use this sound as a reference (<Audio N>) for a supported H3 clip", onclick: () => { C.videoBackend = "standard"; C.goes = "video"; C.start = "refs"; C.step = 1; if (!C.refAudios.includes(m.path)) { C.refAudios.push(m.path); C.audio_notes.push(""); } C.prompt = ""; tab = "Create"; render(); toast("Added as reference sound"); } }, "reference sound"),
+      S.windows_vsa && /\.wav$/i.test(m.path) ? el("button", { class: "small", title: "Open the bounded VSA reference check; a picture or silent video is also required",
+        onclick: () => useVsaMedia(m.path, vsaHasVideo() ? "video-audio" : "picture-audio") }, "VSA reference sound") : null,
       room ? el("button", { class: "small", title: "Open " + room + ", where this take is kept", onclick: () => go(room) }, "open in " + room) : null,
       trashButton("Delete " + m.path, () => clearOut({ paths: [m.path], films: true }, "Delete " + m.path.split("/").pop() + "?")))); }
 // The Library is one node kept between redraws. A redraw builds its tiles at once from the last listing, around the same players and
@@ -1331,6 +1448,11 @@ function libDraw(all_, bin) { const box = el("div", {}, el("h2", {}, "Library"))
       el("div", { class: "cap", style: "padding-top:0;justify-content:flex-end;flex-wrap:wrap" }, actButtons(m), capButton(m),
       m.kind === "video" ? el("button", { class: "small", title: "Supported H3: start a new clip on this clip's last frame", onclick: async () => { try { const r = await api("/api/frame", { path: m.path, at: "last" }); C.videoBackend = "standard"; C.image = r.path; C.prompt = ""; C.goes = "video"; C.start = "own"; C.step = 1; tab = "Create"; render(); } catch (e) { toast(e.message); } } }, "continue") : el("button", { class: "small", title: "Supported H3: end a new clip on this picture", onclick: () => { C.videoBackend = "standard"; C.lastImage = m.path; C.prompt = ""; C.goes = "video"; if (C.start === "refs") C.start = "text"; C.step = 1; tab = "Create"; render(); } }, "last frame"),
       m.kind === "video" ? el("button", { class: "small", onclick: () => addToTimeline(m.path) }, "+ timeline") : el("button", { class: "small", onclick: () => useVideoPicture(m.path) }, "use"),
+      m.kind === "video" && S.windows_vsa && /\.mp4$/i.test(m.path) ? [
+        el("button", { class: "small", title: "Check an already bounded silent MP4; does not convert or render",
+          onclick: () => useVsaMedia(m.path, "video") }, "VSA video reference"),
+        el("button", { class: "small", title: "Check an already bounded MP4 and its AAC soundtrack; requires its own qualification",
+          onclick: () => useVsaMedia(m.path, "video-sound") }, "VSA video + sound")] : null,
       m.kind === "video" ? null : el("button", { class: "small", title: "Re-draw this picture: say in words what changes", onclick: () => edOpen(m.path) }, "edit"),
       m.kind === "video" || !LORAS.some(r => r.target === "image" && r.installed && r.id === "qwen-multiple-angles") ? null : el("button", { class: "small", title: "Show this picture's subject from another camera angle (Multiple Angles LoRA)", onclick: () => edOpen(m.path, "angles") }, "new angle"),
       // out of the library: the server moves the file to the studio's trash folder

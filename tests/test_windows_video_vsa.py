@@ -25,6 +25,33 @@ def receipt():
             "max_host_commit_used_mb": 45000}}]}
 
 
+def reference_wav(path, rate=32000, frames=64000, channels=2, width=2):
+    import wave
+    with wave.open(str(path), "wb") as audio:
+        audio.setparams((channels, width, rate, frames, "NONE", "not compressed"))
+        audio.writeframes(b"\0" * frames * channels * width)
+    return path
+
+
+def video_metadata(sound=False, **changes):
+    return {"streams": [{"codec_type": "video", "codec_name": "h264", "width": 512, "height": 288,
+                         "avg_frame_rate": "24/1", "r_frame_rate": "24/1", "nb_frames": "48",
+                         "duration": "2.000000", **({"start_time": "0"} if sound else {}), **changes},
+                        *([{"codec_type": "audio", "codec_name": "aac", "sample_rate": "32000",
+                            "channels": 2, "duration": "2.000000", "start_time": "0"}] if sound else [])],
+            "format": {"duration": "2.000000"}}
+
+
+def mock_video_probe(monkeypatch, data=None):
+    import json
+    from types import SimpleNamespace
+    monkeypatch.setattr(vsa.library, "tool", lambda name: name)
+    def probe(command, **kwargs):
+        assert command[0] == "ffprobe" and kwargs["timeout"] == 10 and kwargs["check"]
+        return SimpleNamespace(stdout=json.dumps(video_metadata() if data is None else data))
+    monkeypatch.setattr(vsa.subprocess, "run", probe)
+
+
 @pytest.mark.parametrize("params", [
     {}, {"image": "x.png", "prompt": ""}, {"image": "x.png", "prompt": "shot", "frames": 23},
     {"image": "x.png", "prompt": "shot", "seed": True}, {"image": "x.png", "prompt": "shot", "seed": -1},
@@ -51,15 +78,20 @@ def test_prompt_is_not_rewritten_and_only_declared_settings_are_returned():
     assert vsa.parameters(params) == params
 
 
-@pytest.mark.parametrize("recipe,count", [("text", 0), ("picture", 1), ("two-pictures", 2)])
+@pytest.mark.parametrize("recipe,count", [("text", 0), ("picture", 1), ("two-pictures", 2), ("picture-audio", 1),
+                                         ("video", 0), ("video-audio", 0), ("video-sound", 0)])
 def test_input_recipes_have_distinct_evidence_and_validate_reference_counts(recipe, count):
     params = {"recipe": recipe, "prompt": "The scene.", "seed": 7}
     if count:
         params["image"] = "uploads/one.png"
     if count == 2:
         params["extra_image"] = "uploads/two.png"
+    if recipe in vsa.AUDIO_RECIPES:
+        params["audio"] = "uploads/sound.wav"
+    if recipe in vsa.VIDEO_RECIPES:
+        params["video"] = "uploads/reference.mp4"
     assert vsa.parameters(params)["prompt"] == "The scene."
-    assert len({vsa.evidence_kind(22, name) for name in vsa.RECIPES}) == 3
+    assert len({vsa.evidence_kind(22, name) for name in vsa.RECIPES}) == len(vsa.RECIPES)
     if recipe != "picture":
         with pytest.raises(ValueError, match="22-frame"):
             vsa.parameters(params | {"frames": 39})
@@ -72,13 +104,23 @@ def test_input_recipes_have_distinct_evidence_and_validate_reference_counts(reci
     {"recipe": "two-pictures", "image": "one.png"},
     {"recipe": "picture", "image": "one.png", "extra_image": "two.png"},
     {"recipe": "unknown"},
+    {"recipe": "picture-audio", "image": "one.png"},
+    {"recipe": "picture", "image": "one.png", "audio": "sound.wav"},
+    {"recipe": "picture-audio", "audio": "sound.wav"},
+    {"recipe": "video"},
+    {"recipe": "video", "video": "clip.mp4", "image": "one.png"},
+    {"recipe": "video", "video": "clip.mp4", "audio": "sound.wav"},
+    {"recipe": "picture", "image": "one.png", "video": "clip.mp4"},
+    {"recipe": "video-audio", "video": "clip.mp4"},
+    {"recipe": "video-sound", "video": "clip.mp4", "audio": "extra.wav"},
+    {"recipe": "video-sound", "video": "clip.mp4", "image": "extra.png"},
 ])
 def test_new_input_recipe_rejects_mismatched_images(params):
     with pytest.raises(ValueError):
         vsa.parameters({"prompt": "A scene."} | params)
 
 
-@pytest.mark.parametrize("recipe", ["text", "two-pictures"])
+@pytest.mark.parametrize("recipe", ["text", "two-pictures", "picture-audio", "video", "video-audio", "video-sound"])
 def test_new_input_recipes_require_own_evidence_even_with_gating_off(tmp_path, monkeypatch, recipe):
     monkeypatch.setattr(vsa, "status", lambda frames=22, recipe="picture": {
         "installed": True, "available": recipe == "picture", "qualified": recipe == "picture",
@@ -87,13 +129,19 @@ def test_new_input_recipes_require_own_evidence_even_with_gating_off(tmp_path, m
     params = {"recipe": recipe, "prompt": "The scene."}
     if recipe == "two-pictures":
         params.update(image="one.png", extra_image="two.png")
+    if recipe in vsa.AUDIO_RECIPES:
+        params.update(image="one.png", audio="sound.wav")
+    if recipe in vsa.VIDEO_RECIPES:
+        params.pop("image", None)
+        params["video"] = "clip.mp4"
     with pytest.raises(windows_runtime.RouteUnavailable, match="Separate"):
         vsa.require(params)
     with pytest.raises(vsa.native.SafetyRefusal, match="Separate"):
         vsa.memory_fit(snapshot(), recipe=recipe)
 
 
-@pytest.mark.parametrize("recipe,count", [("text", 0), ("two-pictures", 2)])
+@pytest.mark.parametrize("recipe,count", [("text", 0), ("two-pictures", 2), ("picture-audio", 1),
+                                         ("video", 0), ("video-audio", 0), ("video-sound", 0)])
 def test_new_recipe_supervisor_uses_reference_graph_and_independent_preflight(tmp_path, monkeypatch, recipe, count):
     import sys
     from PIL import Image
@@ -102,7 +150,13 @@ def test_new_recipe_supervisor_uses_reference_graph_and_independent_preflight(tm
     images = [tmp_path / f"reference-{i}.png" for i in range(count)]
     for image in images:
         Image.new("RGB", (512, 288)).save(image)
+    audio = reference_wav(tmp_path / "sound.wav") if recipe in vsa.AUDIO_RECIPES else None
+    video = tmp_path / "reference.mp4" if recipe in vsa.VIDEO_RECIPES else None
+    if video:
+        video.write_bytes(b"synthetic video; probing and preparation are mocked")
+        mock_video_probe(monkeypatch, video_metadata(sound=recipe == "video-sound"))
     preflights, captured = [], []
+    reference_renderer = generation.reference
     monkeypatch.setattr(vsa, "preflight", lambda *args, **kwargs: preflights.append(kwargs))
     monkeypatch.setattr(generation, "mac_release", lambda: None)
     monkeypatch.setattr(generation, "reference", captured.append)
@@ -113,10 +167,13 @@ def test_new_recipe_supervisor_uses_reference_graph_and_independent_preflight(tm
         return result
     monkeypatch.setattr(vsa.native, "observe_native", observe)
     vsa.run_case(tmp_path / "out", images[0] if count else None, "A scene.", 7, {},
-                 qualification=True, recipe=recipe, extra_image=images[1] if count else None)
+                 qualification=True, recipe=recipe, extra_image=images[1] if count == 2 else None,
+                 audio=audio, video=video)
     args = captured[0]
     assert args.ref_mode == "vsa" and args.vsa_recipe == recipe
     assert args.ref == [str(image) for image in images]
+    assert args.ref_audio == ([str(audio)] if audio else [])
+    assert args.ref_video == ([str(video)] if video else [])
     assert preflights == [{"recipe": recipe}]
     monkeypatch.setenv("STUDIO_REF2VA_VSA", "1")
     monkeypatch.setenv("STUDIO_VSA_CHECK", "1")
@@ -124,12 +181,62 @@ def test_new_recipe_supervisor_uses_reference_graph_and_independent_preflight(tm
     monkeypatch.setattr(vsa.sys, "platform", "win32")
     vsa.prepare_renderer(args)
     assert preflights[-1]["recipe"] == recipe
+    monkeypatch.setattr(generation, "up", lambda: False)
+    monkeypatch.setattr(generation, "side", lambda name: tmp_path / name)
+    monkeypatch.setattr(generation, "ensure_server", lambda *args: None)
+    monkeypatch.setattr(generation, "installed", lambda *args: True)
+    monkeypatch.setattr(generation, "upload", lambda path: Path(path).name)
+    monkeypatch.setattr(generation, "probe_media", lambda path: {
+        "audio": not bool(video) or recipe == "video-sound", "audio_seconds": 2,
+        "seconds": 2, "video": (512, 288) if video else None})
+    prepared = []
+    prepared_videos = []
+    def sound(path, seconds, folder):
+        prepared.append((path, seconds))
+        return Path(path)
+    monkeypatch.setattr(generation, "prepared_sound", sound)
+    def footage(path, size, limit, folder):
+        prepared_videos.append((path, size, limit))
+        return Path(path), 22
+    monkeypatch.setattr(generation, "prepared_video", footage)
+    graph = {}
+    def capture(workflow, sampler):
+        graph.update(workflow)
+        raise RuntimeError("captured input graph")
+    monkeypatch.setattr(generation, "render", capture)
+    with pytest.raises(RuntimeError, match="captured input graph"):
+        reference_renderer(args)
+    assert graph["6"]["inputs"]["clip"] == ["102", 1]
+    if audio:
+        assert prepared == [(str(audio), 22 / 24)]
+        assert graph["6"]["inputs"]["ref_audios.ref_audio_0"] == ["70", 0]
+        assert graph["70"]["class_type"] == "LoadAudio"
+    elif recipe == "video-sound":
+        assert prepared == [(str(video), 22 / 24)]
+        assert graph["6"]["inputs"]["ref_video_audios.ref_video_audio_0"] == ["60", 0]
+        assert graph["60"]["class_type"] == "LoadAudio"
+        assert "ref_audios.ref_audio_0" not in graph["6"]["inputs"]
+    else:
+        assert not prepared and "ref_audios.ref_audio_0" not in graph["6"]["inputs"]
+    if video:
+        assert prepared_videos == [(str(video), (512, 288), 22)]
+        assert graph["6"]["inputs"]["ref_videos.ref_video_0"] == ["50", 0]
+        assert "ref_images.ref_image_0" not in graph["6"]["inputs"]
+        assert any(key.startswith("ref_video_audios") for key in graph["6"]["inputs"]) == (recipe == "video-sound")
+        args.ref_video_sound = recipe != "video-sound"
+        with pytest.raises(ValueError, match="recipe"):
+            vsa.prepare_renderer(args)
+        args.ref_video_sound = recipe == "video-sound"
+        args.ref_video_size = "full"
+        with pytest.raises(ValueError, match="recipe"):
+            vsa.prepare_renderer(args)
+        args.ref_video_size = "match"
     args.ref = ["wrong-reference.png"] if not count else []
     with pytest.raises(ValueError, match="recipe"):
         vsa.prepare_renderer(args)
 
 
-@pytest.mark.parametrize("recipe", ["text", "two-pictures"])
+@pytest.mark.parametrize("recipe", ["text", "two-pictures", "picture-audio", "video", "video-audio", "video-sound"])
 def test_input_recipe_qualification_api_and_build_preserve_recipe(tmp_path, monkeypatch, recipe):
     from fastapi import HTTPException
     monkeypatch.setattr(vsa, "prerequisites", lambda: "")
@@ -142,7 +249,7 @@ def test_input_recipe_qualification_api_and_build_preserve_recipe(tmp_path, monk
     assert rejected.value.status_code == 400
 
 
-@pytest.mark.parametrize("recipe", ["text", "two-pictures"])
+@pytest.mark.parametrize("recipe", ["text", "two-pictures", "picture-audio", "video", "video-audio", "video-sound"])
 @pytest.mark.parametrize("refused", [False, True])
 def test_new_recipe_check_keeps_receipts_and_failures_separate(tmp_path, monkeypatch, recipe, refused):
     writes, runs = [], []
@@ -153,6 +260,26 @@ def test_new_recipe_check_keeps_receipts_and_failures_separate(tmp_path, monkeyp
     monkeypatch.setattr(vsa, "model_files", lambda: {})
     monkeypatch.setattr(vsa.features, "save_attempt", lambda kind, value: writes.append(("attempt", kind, value)))
     monkeypatch.setattr(vsa.features, "save_pass", lambda kind, value: writes.append(("pass", kind, value)))
+    if recipe == "picture-audio":
+        def extract(command, **kwargs):
+            assert kwargs["timeout"] == 30 and kwargs["check"]
+            reference_wav(Path(command[-1]))
+        monkeypatch.setattr(vsa.subprocess, "run", extract)
+    if recipe in vsa.VIDEO_RECIPES:
+        import json
+        from types import SimpleNamespace
+        monkeypatch.setattr(vsa.library, "tool", lambda name: name)
+        def extract_video(command, **kwargs):
+            if command[0] == "ffprobe":
+                assert kwargs["timeout"] == 10
+                return SimpleNamespace(stdout=json.dumps(video_metadata(sound=recipe == "video-sound")))
+            assert command[0] == "ffmpeg" and kwargs["timeout"] == 30
+            if Path(command[-1]).suffix == ".wav":
+                reference_wav(Path(command[-1]))
+            else:
+                assert ("-an" in command) == (recipe != "video-sound")
+                Path(command[-1]).write_bytes(b"synthetic reference")
+        monkeypatch.setattr(vsa.subprocess, "run", extract_video)
     def run(output, image, prompt, seed, observations, **kwargs):
         runs.append((image, kwargs))
         if refused:
@@ -168,8 +295,133 @@ def test_new_recipe_check_keeps_receipts_and_failures_separate(tmp_path, monkeyp
         assert result["ok"] and result["fingerprint"]["recipe"]["input_recipe"] == recipe
     assert all(kind == vsa.evidence_kind(22, recipe) for _, kind, _ in writes)
     assert runs[0][1]["qualification"] and runs[0][1]["recipe"] == recipe
-    assert (runs[0][0] is None) == (recipe == "text")
+    assert (runs[0][0] is None) == (recipe in ("text", *vsa.VIDEO_RECIPES))
     assert not list(tmp_path.glob("*reference*.png"))
+    assert not list(tmp_path.glob("*reference*.wav"))
+    assert not list(tmp_path.glob("*reference*.mp4"))
+
+
+@pytest.mark.parametrize("changes", [{"width": 513}, {"height": 320}, {"height": 32}, {"nb_frames": "22"},
+                                    {"avg_frame_rate": "30/1"}, {"r_frame_rate": "30/1"},
+                                    {"duration": "3"}, {"duration": "NaN"}, {"codec_name": "hevc"},
+                                    {"nb_frames": "N/A"}])
+def test_video_recipe_rejects_out_of_scope_metadata(tmp_path, monkeypatch, changes):
+    path = tmp_path / "reference.mp4"
+    path.write_bytes(b"synthetic video")
+    mock_video_probe(monkeypatch, video_metadata(**changes))
+    with pytest.raises(ValueError):
+        vsa.require_video(path)
+
+
+def test_silent_video_api_rejects_sound_and_keeps_probe_failures_explicit(client, monkeypatch):
+    monkeypatch.setattr(server, "WINDOWS", True)
+    path = server.HOME / "uploads" / "reference.mp4"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"synthetic video")
+    data = video_metadata()
+    mock_video_probe(monkeypatch, data)
+    payload = {"path": "uploads/reference.mp4", "kind": "video"}
+    response = client.post("/api/video-vsa/reference", json=payload)
+    assert response.status_code == 200 and response.json()["frames"] == 48
+    assert response.json()["effective_seconds"] == 22 / 24
+    data["streams"].append({"codec_type": "audio"})
+    response = client.post("/api/video-vsa/reference", json=payload)
+    assert response.status_code == 400 and "no audio" in response.json()["error"]
+    def timeout(*args, **kwargs):
+        raise vsa.subprocess.TimeoutExpired("ffprobe", 10)
+    monkeypatch.setattr(vsa.subprocess, "run", timeout)
+    response = client.post("/api/video-vsa/reference", json=payload)
+    assert response.status_code == 400 and "ten seconds" in response.json()["error"]
+    assert client.post("/api/video-vsa/reference", json=payload | {"path": "../outside.mp4"}).status_code == 400
+
+
+@pytest.mark.parametrize("changes", [{"sample_rate": "48000"}, {"channels": 3}, {"codec_name": "mp3"},
+                                    {"duration": "1"}, {"duration": "NaN"}, {"start_time": "0.5"}])
+def test_video_sound_rejects_unbounded_or_offset_soundtracks(tmp_path, monkeypatch, changes):
+    path = tmp_path / "reference.mp4"
+    path.write_bytes(b"synthetic reference")
+    data = video_metadata(sound=True)
+    data["streams"][1].update(changes)
+    mock_video_probe(monkeypatch, data)
+    with pytest.raises(ValueError, match="soundtrack"):
+        vsa.require_video(path, sound=True)
+
+
+def test_video_sound_api_is_explicit_and_never_qualifies_silent_video(client, monkeypatch):
+    monkeypatch.setattr(server, "WINDOWS", True)
+    path = server.HOME / "uploads" / "reference.mp4"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"synthetic reference")
+    data = video_metadata(sound=True)
+    mock_video_probe(monkeypatch, data)
+    payload = {"path": "uploads/reference.mp4", "kind": "video", "video_sound": True}
+    response = client.post("/api/video-vsa/reference", json=payload)
+    assert response.status_code == 200 and response.json()["video_sound"] is True
+    assert client.post("/api/video-vsa/reference", json=payload | {"video_sound": False}).status_code == 400
+    assert client.post("/api/video-vsa/reference", json=payload | {"kind": "audio"}).status_code == 400
+    data["streams"].pop()
+    assert client.post("/api/video-vsa/reference", json=payload).status_code == 400
+
+
+def test_video_recipe_checks_paths_and_source_byte_cap_before_probing(tmp_path, monkeypatch):
+    monkeypatch.setattr(vsa, "status", lambda *args: {"available": True})
+    monkeypatch.setattr(vsa.library, "studio_home", lambda: tmp_path)
+    mock_video_probe(monkeypatch)
+    path = tmp_path / "reference.mp4"
+    path.write_bytes(b"synthetic video")
+    params = {"recipe": "video", "video": "reference.mp4", "prompt": "As written."}
+    command, _, _ = vsa.build(tmp_path, params, "video-test")
+    assert command[command.index("--video") + 1] == str(path)
+    with pytest.raises(ValueError, match="inside"):
+        vsa.require(params | {"video": "../outside.mp4"})
+    monkeypatch.setattr(vsa.subprocess, "run", lambda *a, **k: pytest.fail("Oversized video must not be probed"))
+    path.write_bytes(b"\0" * 5000001)
+    with pytest.raises(ValueError, match="5000000"):
+        vsa.require_video(path)
+
+
+def test_video_reference_composer_names_video_without_inventing_a_picture(client):
+    response = client.post("/api/compose", json={
+        "references": 0, "referenced": True, "first_frame": False, "frames": 22,
+        "fields": {"video_subjects": ["The baker and bakery"], "scene": "A bakery counter",
+                   "camera": "a locked, still camera", "soundscape": "Soft bakery room ambience."}})
+    assert response.status_code == 200
+    prompt = response.json()["prompt"]
+    assert "<Video 1>" in prompt and "<Picture 1>" not in prompt
+    assert "overall_soundscape:" in prompt
+
+
+@pytest.mark.parametrize("changes", [{"frames": 63999}, {"frames": 64001}, {"rate": 48000},
+                                    {"channels": 3}, {"width": 4}])
+def test_audio_recipe_rejects_out_of_scope_pcm(tmp_path, changes):
+    with pytest.raises(ValueError, match="reference audio"):
+        vsa.require_audio(reference_wav(tmp_path / "wrong.wav", **changes))
+
+
+@pytest.mark.parametrize("channels", [1, 2])
+def test_audio_reference_api_checks_bounded_pcm_without_loading_models(client, monkeypatch, channels):
+    monkeypatch.setattr(server, "WINDOWS", True)
+    folder = server.HOME / "uploads"
+    folder.mkdir(exist_ok=True, parents=True)
+    path = reference_wav(folder / "bounded.wav", channels=channels)
+    response = client.post("/api/video-vsa/reference", json={"path": "uploads/bounded.wav", "kind": "audio"})
+    assert response.status_code == 200 and response.json()["effective_seconds"] == 22 / 24
+    path.write_bytes(path.read_bytes()[:-2])
+    assert client.post("/api/video-vsa/reference", json={"path": "uploads/bounded.wav", "kind": "audio"}).status_code == 400
+    assert client.post("/api/video-vsa/reference", json={"path": "../outside.wav", "kind": "audio"}).status_code == 400
+
+
+def test_audio_recipe_checks_studio_paths_and_builds_audio_argument(tmp_path, monkeypatch):
+    from PIL import Image
+    monkeypatch.setattr(vsa, "status", lambda *args: {"available": True})
+    monkeypatch.setattr(vsa.library, "studio_home", lambda: tmp_path)
+    Image.new("RGB", (512, 288)).save(tmp_path / "one.png")
+    reference_wav(tmp_path / "sound.wav")
+    params = {"recipe": "picture-audio", "image": "one.png", "audio": "sound.wav", "prompt": "As written."}
+    command, _, _ = vsa.build(tmp_path, params, "audio-test")
+    assert command[command.index("--audio") + 1] == str(tmp_path / "sound.wav")
+    with pytest.raises(ValueError, match="inside"):
+        vsa.require(params | {"audio": "../sound.wav"})
 
 
 def test_qualification_reports_checksum_work_before_saving_receipt(tmp_path, monkeypatch, capsys):

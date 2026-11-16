@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timezone
+from fractions import Fraction
 import hashlib
 import json
 import math
@@ -12,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
+import wave
 
 from feature_checks import matches_qualification
 from lengths import counts, seconds_of
@@ -46,7 +48,16 @@ AUDIO_VAE = "minimax_h3_audio_vae_fp32.safetensors"
 TRANSFORMER = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
 TURBO = "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
 GATE = "fasth3_vsa_gate.safetensors"
-RECIPES = {"picture": "One picture", "text": "Text only", "two-pictures": "Two pictures"}
+RECIPES = {"picture": "One picture", "text": "Text only", "two-pictures": "Two pictures",
+           "picture-audio": "Picture and audio", "video": "Silent video reference",
+           "video-audio": "Silent video and audio", "video-sound": "Video with its own sound"}
+VIDEO_RECIPES = ("video", "video-audio", "video-sound")
+AUDIO_RECIPES = ("picture-audio", "video-audio")
+AUDIO_FIXTURE = "baker_studio_864x480_5s.mp4"
+AUDIO_SCOPE = "One 2-second PCM16 WAV, 32000 Hz, mono or stereo, at most 300000 bytes; only the first 0.917 s conditions this execution check."
+VIDEO_SCOPE = "One silent 2-second H.264 MP4, 48 frames at 24 fps, sides in multiples of 32 up to 512x288, at most 5000000 bytes; only the first 22 frames (0.917 s) condition this execution check."
+VIDEO_SOUND_SCOPE = VIDEO_SCOPE.replace("silent 2-second", "2-second").replace(
+    "MP4,", "MP4 with one 32000 Hz mono/stereo AAC soundtrack (two seconds),")
 SCOPE = "One reference picture up to 512x288; 864x480, 22 frames / 24 fps (0.917 s), four passes, VSA sparsity 0.75."
 PROMPT = ("The baker in <Picture 1> stands at the counter and smiles gently. A locked, still camera. "
           "Mouth stays closed.\noverall_soundscape: Soft bakery room ambience.")
@@ -88,21 +99,31 @@ def prerequisites() -> str:
 
 
 def parameters(params: dict) -> dict:
-    if not isinstance(params, dict) or set(params) - {"image", "extra_image", "recipe", "prompt", "seed", "frames", "sequence_seconds"}:
-        raise ValueError("VSA accepts only recipe, image, extra_image, prompt, seed, frames and optional sequence_seconds.")
+    if not isinstance(params, dict) or set(params) - {"image", "extra_image", "audio", "video", "recipe", "prompt", "seed", "frames", "sequence_seconds"}:
+        raise ValueError("VSA accepts only recipe, image, extra_image, audio, video, prompt, seed, frames and optional sequence_seconds.")
     recipe = recipe_name(params.get("recipe", "picture"))
-    if recipe != "text" and (not isinstance(params.get("image"), str) or not params["image"].strip()):
+    if recipe not in ("text", *VIDEO_RECIPES) and (not isinstance(params.get("image"), str) or not params["image"].strip()):
         raise ValueError("Choose one reference picture inside Studio.")
-    if recipe == "text" and ("image" in params or "extra_image" in params):
-        raise ValueError("Text-only VSA does not accept reference pictures.")
+    if recipe in ("text", *VIDEO_RECIPES) and ("image" in params or "extra_image" in params):
+        raise ValueError("This VSA input recipe does not accept reference pictures.")
     if recipe == "two-pictures":
         if not isinstance(params.get("extra_image"), str) or not params["extra_image"].strip():
             raise ValueError("Choose a second reference picture inside Studio.")
     elif "extra_image" in params:
         raise ValueError("A second picture needs the two-picture VSA recipe.")
+    if recipe in AUDIO_RECIPES:
+        if not isinstance(params.get("audio"), str) or not params["audio"].strip():
+            raise ValueError("Choose one bounded reference WAV inside Studio.")
+    elif "audio" in params:
+        raise ValueError("Reference WAV audio needs the picture-and-audio or video-and-audio VSA recipe.")
+    if recipe in VIDEO_RECIPES:
+        if not isinstance(params.get("video"), str) or not params["video"].strip():
+            raise ValueError("Choose one bounded reference video matching the selected VSA recipe inside Studio.")
+    elif "video" in params:
+        raise ValueError("Reference video needs a registered video-reference VSA recipe.")
     prompt = params.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 20000:
-        raise ValueError("Write a nonempty prompt of at most 20000 characters; the picture is <Picture 1>.")
+        raise ValueError("Write a nonempty prompt of at most 20000 characters; references use <Picture 1>, <Video 1> or <Audio 1>.")
     seed = params.get("seed", 7)
     if type(seed) is not int or not 0 <= seed <= 2 ** 32 - 1:
         raise ValueError("Seed must be an integer from 0 to 4294967295.")
@@ -110,9 +131,13 @@ def parameters(params: dict) -> dict:
     if recipe != "picture" and (frames != FRAMES or "sequence_seconds" in params):
         raise ValueError("New VSA input recipes currently accept only a single 22-frame clip.")
     sequence = {"sequence_seconds": sequence_seconds(params["sequence_seconds"])} if "sequence_seconds" in params else {}
-    inputs = {} if recipe == "text" else {"image": params["image"]}
+    inputs = {} if recipe in ("text", *VIDEO_RECIPES) else {"image": params["image"]}
     if recipe == "two-pictures":
         inputs["extra_image"] = params["extra_image"]
+    if recipe in AUDIO_RECIPES:
+        inputs["audio"] = params["audio"]
+    if recipe in VIDEO_RECIPES:
+        inputs["video"] = params["video"]
     return inputs | {"prompt": prompt, "seed": seed} | ({"recipe": recipe} if recipe != "picture" else {}) | ({"frames": frames} if frames != FRAMES else {}) | sequence
 
 
@@ -130,6 +155,65 @@ def require_image(path: Path) -> None:
         image.load()
         if image.width > 512 or image.height > 288:
             raise ValueError("VSA reference: at most 512x288. Resize a copy explicitly before queuing.")
+
+
+def require_audio(path: Path) -> None:
+    if not path.is_file() or path.suffix.lower() != ".wav" or not 44 <= path.stat().st_size <= 300000:
+        raise ValueError("VSA reference audio: " + AUDIO_SCOPE)
+    try:
+        with wave.open(str(path), "rb") as audio:
+            if (audio.getcomptype() != "NONE" or audio.getsampwidth() != 2 or audio.getframerate() != 32000
+                    or audio.getnchannels() not in (1, 2) or audio.getnframes() != 64000
+                    or len(audio.readframes(64000)) != 64000 * audio.getnchannels() * 2):
+                raise ValueError("VSA reference audio: " + AUDIO_SCOPE)
+    except (wave.Error, EOFError) as error:
+        raise ValueError("The VSA reference must be a readable PCM16 WAV. " + AUDIO_SCOPE) from error
+
+
+def require_video(path: Path, *, sound: bool = False) -> dict:
+    scope = VIDEO_SOUND_SCOPE if sound else VIDEO_SCOPE
+    if not path.is_file():
+        raise ValueError("The VSA reference video does not exist.")
+    size = path.stat().st_size
+    if path.suffix.lower() != ".mp4" or not 1 <= size <= 5000000:
+        raise ValueError(f"VSA reference video file is outside the recipe ({size} bytes). " + scope)
+    try:
+        result = subprocess.run([library.tool("ffprobe"), "-v", "error", "-show_entries",
+                                 "stream=codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,nb_frames,duration,sample_rate,channels,start_time:format=duration",
+                                 "-of", "json", str(path)], capture_output=True, text=True, check=True,
+                                timeout=10, creationflags=0x08000000)
+        data = json.loads(result.stdout)
+        streams = data["streams"]
+        videos = [stream for stream in streams if stream["codec_type"] == "video"]
+        audios = [stream for stream in streams if stream["codec_type"] == "audio"]
+        if len(videos) != 1 or len(audios) != int(sound) or len(streams) != 1 + int(sound):
+            raise ValueError("VSA requires exactly one video stream and " +
+                             ("one audio stream. " if sound else "no audio. ") + scope)
+        video = videos[0]
+        if sound:
+            audio = audios[0]
+            if (audio["codec_name"] != "aac" or int(audio["sample_rate"]) != 32000
+                    or type(audio["channels"]) is not int or audio["channels"] not in (1, 2)
+                    or not 1.999 <= float(audio["duration"]) <= 2.001
+                    or abs(float(audio["start_time"])) > .001
+                    or abs(float(video["start_time"])) > .001):
+                raise ValueError("The reference video's soundtrack is outside the recipe. " + scope)
+        width, height = video["width"], video["height"]
+        if (video["codec_name"] != "h264" or type(width) is not int or type(height) is not int
+                or not 32 <= width <= 512 or not 32 <= height <= 288 or width % 32 or height % 32
+                or not .25 <= width / height <= 4
+                or Fraction(video["avg_frame_rate"]) != 24 or Fraction(video["r_frame_rate"]) != 24
+                or int(video["nb_frames"]) != 48 or not 1.999 <= float(video["duration"]) <= 2.001
+                or not 1.999 <= float(data["format"]["duration"]) <= 2.001):
+            raise ValueError(f"VSA reference video is outside the recipe: {width}x{height}, "
+                             f"{video['codec_name']}, rates {video['avg_frame_rate']}/{video['r_frame_rate']}, "
+                             f"{video['nb_frames']} frames, duration {video['duration']} s "
+                             f"(container {data['format']['duration']} s). " + scope)
+    except (KeyError, TypeError, ZeroDivisionError, json.JSONDecodeError) as error:
+        raise ValueError("The reference video has incomplete or invalid metadata. " + scope) from error
+    except subprocess.SubprocessError as error:
+        raise ValueError("The reference video could not be probed within ten seconds. " + scope) from error
+    return {"width": width, "height": height, "frames": 48, "fps": 24}
 
 
 def calibration_frames(frames: int) -> int:
@@ -165,6 +249,14 @@ def fingerprint(frames: int = FRAMES, recipe: str = "picture") -> dict:
     return {"contract": CONTRACT, "kind": KIND,
             "recipe": {"width": WIDTH, "height": HEIGHT, "frames": frames, "steps": 4, "sparsity": .75,
                        "reference_width": 512, "reference_height": 288, "cold": True,
+                       **({"audio": {"rate": 32000, "frames": 64000, "channels": [1, 2], "sample_bytes": 2,
+                                     "max_bytes": 300000, "fixture": library.FIXTURES[AUDIO_FIXTURE]}}
+                          if recipe in AUDIO_RECIPES else {}),
+                       **({"video": {"width": 512, "height": 288, "fps": 24, "frames": 48, "audio": recipe == "video-sound",
+                                     "codec": "h264", "max_bytes": 5000000, "fixture": library.FIXTURES[AUDIO_FIXTURE],
+                                     **({"sound": {"codec": "aac", "rate": 32000, "channels": [1, 2],
+                                                   "seconds": 2, "start_seconds": 0}} if recipe == "video-sound" else {})}}
+                          if recipe in VIDEO_RECIPES else {}),
                        "comfy_flags": list(COMFY_FLAGS), **({"input_recipe": recipe} if recipe != "picture" else {})},
             "models": files, "node": NODE_COMMIT,
             "model_root": hashlib.sha256(str(windows_runtime.model_root().resolve()).encode()).hexdigest(),
@@ -205,6 +297,12 @@ def status(frames: int = FRAMES, recipe: str = "picture") -> dict:
     if recipe != "picture":
         base.update(experimental=True, scope=f"{RECIPES[recipe]}; 864x480, 22 frames / 24 fps (0.917 s), four passes.",
                     recipe=recipe)
+    if recipe in AUDIO_RECIPES:
+        base["scope"] += " " + AUDIO_SCOPE
+    if recipe in VIDEO_RECIPES:
+        base["scope"] += " " + VIDEO_SCOPE
+    if recipe == "video-sound":
+        base["scope"] = base["scope"].replace(VIDEO_SCOPE, VIDEO_SOUND_SCOPE)
     try:
         if why := prerequisites():
             return {**base, "why": why}
@@ -263,6 +361,16 @@ def require(params: dict) -> dict:
             if not path.is_relative_to(home):
                 raise ValueError("The reference picture must be inside this Studio.")
             require_image(path)
+    if "audio" in params:
+        path = (home / params["audio"]).resolve()
+        if not path.is_relative_to(home):
+            raise ValueError("The reference audio must be inside this Studio.")
+        require_audio(path)
+    if "video" in params:
+        path = (home / params["video"]).resolve()
+        if not path.is_relative_to(home):
+            raise ValueError("The reference video must be inside this Studio.")
+        require_video(path, sound=recipe == "video-sound")
     return params
 
 
@@ -407,12 +515,19 @@ def prepare_renderer(args) -> None:
     recipe = recipe_name(getattr(args, "vsa_recipe", "picture"))
     evidence_kind(frames, recipe)
     if ((args.width, args.height, args.frames, args.steps) != (WIDTH, HEIGHT, frames, 4)
-            or len(args.ref or []) != {"text": 0, "picture": 1, "two-pictures": 2}[recipe] or args.ref_video or args.ref_audio or args.lora
-            or args.crop or args.ref_video_sound or args.ref_size != "match" or args.engine != "comfy"
+            or len(args.ref or []) != (0 if recipe in ("text", *VIDEO_RECIPES) else 2 if recipe == "two-pictures" else 1)
+            or len(args.ref_audio or []) != int(recipe in AUDIO_RECIPES)
+            or len(args.ref_video or []) != int(recipe in VIDEO_RECIPES) or args.lora
+            or args.crop or args.ref_video_sound != (recipe == "video-sound") or args.ref_size != "match" or args.engine != "comfy"
+            or recipe in VIDEO_RECIPES and args.ref_video_size != "match"
             or float(os.environ.get("SPARK_REF_CFG") or 1) != 1):
-        raise ValueError(f"VSA requires its supervised one-picture, {frames}-frame, four-pass recipe.")
+        raise ValueError(f"VSA requires its supervised {recipe}, {frames}-frame, four-pass recipe.")
     for image in args.ref or []:
         require_image(Path(image))
+    for audio in args.ref_audio or []:
+        require_audio(Path(audio))
+    for video in args.ref_video or []:
+        require_video(Path(video), sound=recipe == "video-sound")
     preflight(qualification=qualification, frames=frames, wait_for_admission=True, recipe=recipe)
 
 
@@ -423,7 +538,7 @@ def build(home: Path, params: dict, job_id: str) -> tuple[list[str], dict, list[
                "--output", str(target.parent), "--recipe", params.get("recipe", "picture"),
                "--prompt", params["prompt"], "--seed", str(params["seed"]),
                "--frames", str(params.get("frames", FRAMES))]
-    for key in ("image", "extra_image"):
+    for key in ("image", "extra_image", "audio", "video"):
         if key in params:
             command += ["--" + key.replace("_", "-"), str((home / params[key]).resolve())]
     outputs = [str(target)]
@@ -463,11 +578,13 @@ def check_media(target: Path, expected_frames: int) -> None:
 
 def run_case(output: Path, image: Path | None, prompt: str, seed: int, observations: dict, qualification=False,
              frames: int = FRAMES, timeout_s: int = TIMEOUT_S, recipe: str = "picture",
-             extra_image: Path | None = None) -> dict:
+             extra_image: Path | None = None, audio: Path | None = None, video: Path | None = None) -> dict:
     frames = calibration_frames(frames)
     parameters({"recipe": recipe, "prompt": prompt, "seed": seed, "frames": frames,
                 **({"image": str(image)} if image is not None else {}),
-                **({"extra_image": str(extra_image)} if extra_image is not None else {})})
+                **({"extra_image": str(extra_image)} if extra_image is not None else {}),
+                **({"audio": str(audio)} if audio is not None else {}),
+                **({"video": str(video)} if video is not None else {})})
     if type(timeout_s) is not int or not 1 <= timeout_s <= TIMEOUT_S:
         raise ValueError("The VSA part deadline must be between 1 and 1800 seconds.")
     if output.exists():
@@ -476,6 +593,12 @@ def run_case(output: Path, image: Path | None, prompt: str, seed: int, observati
     for picture in (image, extra_image):
         if picture is not None:
             require_image(picture)
+    if audio is not None:
+        require_audio(audio)
+    if video is not None:
+        details = require_video(video, sound=recipe == "video-sound")
+        observations["reference_video"] = {**details, "source_seconds": 2, "effective_frames": frames,
+                                           "effective_seconds": frames / 24, "audio": recipe == "video-sound"}
     preflight(qualification, frames, recipe=recipe)
     before = (fingerprint(frames) if recipe == "picture" else fingerprint(frames, recipe)) if not qualification else None
     command = [windows_cuda.python(), "-X", "utf8", str(features.PACK / "spark" / "spark_generate.py"), "video",
@@ -488,6 +611,14 @@ def run_case(output: Path, image: Path | None, prompt: str, seed: int, observati
             command += ["--ref", str(picture)]
     if recipe != "picture":
         command += ["--vsa-recipe", recipe]
+    if audio is not None:
+        command += ["--ref-audio", str(audio)]
+        observations["reference_audio"] = {"source_seconds": 2, "effective_seconds": frames / 24,
+                                           "rate": 32000, "max_channels": 2}
+    if video is not None:
+        command += ["--ref-video", str(video), "--ref-video-size", "match"]
+        if recipe == "video-sound":
+            command += ["--ref-video-sound"]
     observations.update(case=f"Ref2VA VSA {RECIPES[recipe]}: 864x480, {frames} frames, four passes",
                         input_recipe=recipe, rendered=False)
     def validate():
@@ -810,19 +941,53 @@ def qualify(output: Path, job_id: str, frames: int = FRAMES, timeout_s: int = TI
                 run_case(output, image, PROMPT, 7, observations, qualification=True, frames=frames, timeout_s=timeout_s)
             else:
                 extra = output.parent / f"{output.name}-reference-2.png"
+                audio = output.parent / f"{output.name}-reference.wav"
+                video = output.parent / f"{output.name}-reference.mp4"
                 try:
                     if recipe == "two-pictures":
                         with Image.open(fixture) as source:
                             source.transpose(Image.Transpose.FLIP_LEFT_RIGHT).resize((512, 288), Image.Resampling.LANCZOS).save(extra)
+                    if recipe in (*AUDIO_RECIPES, *VIDEO_RECIPES):
+                        source = features.PACK / "samples" / AUDIO_FIXTURE
+                        if hashlib.sha256(source.read_bytes()).hexdigest() != library.FIXTURES[AUDIO_FIXTURE]:
+                            raise RuntimeError("The pinned VSA reference clip source changed.")
+                    if recipe in AUDIO_RECIPES:
+                        subprocess.run([library.tool("ffmpeg"), "-nostdin", "-v", "error", "-y", "-threads", "2",
+                                        "-i", str(source), "-map", "0:a:0", "-vn", "-t", "2", "-ar", "32000",
+                                        "-ac", "2", "-c:a", "pcm_s16le", str(audio)],
+                                       capture_output=True, check=True, timeout=30, creationflags=0x08000000)
+                        require_audio(audio)
+                    if recipe in VIDEO_RECIPES:
+                        subprocess.run([library.tool("ffmpeg"), "-nostdin", "-v", "error", "-y", "-threads", "2",
+                                        "-i", str(source), "-map", "0:v:0",
+                                        *(["-map", "0:a:0", "-c:a", "aac", "-ar", "32000", "-ac", "2", "-b:a", "128k"]
+                                          if recipe == "video-sound" else ["-an"]), "-t", "2", "-filter_threads", "1",
+                                        "-vf", "fps=24,scale=512:288:flags=lanczos,setsar=1", "-frames:v", "48",
+                                        "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
+                                        "-preset", "veryfast", "-threads", "2",
+                                        str(video)], capture_output=True, check=True, timeout=30, creationflags=0x08000000)
+                        require_video(video, sound=recipe == "video-sound")
                     prompt = ("An empty bakery counter in warm morning light. A locked, still camera.\n"
                               "overall_soundscape: Soft bakery room ambience.") if recipe == "text" else (
                               "The baker from <Picture 1> stands in the bakery shown in <Picture 2>. "
                               "A locked, still camera. Mouth stays closed.\noverall_soundscape: Soft bakery room ambience.")
-                    run_case(output, image if recipe == "two-pictures" else None, prompt, 7, observations,
+                    if recipe == "picture-audio":
+                        prompt = ("The baker from <Picture 1> stands at the bakery counter. A locked, still camera.\n"
+                                  "overall_soundscape: The bakery sound from <Audio 1>.")
+                    if recipe in VIDEO_RECIPES:
+                        prompt = ("The baker and bakery from <Video 1>. The baker stands at the counter. "
+                                  "A locked, still camera.\noverall_soundscape: " +
+                                  ("The bakery sound from <Audio 1>." if recipe in ("video-audio", "video-sound")
+                                   else "Soft bakery room ambience."))
+                    run_case(output, image if recipe not in ("text", *VIDEO_RECIPES) else None, prompt, 7, observations,
                              qualification=True, frames=frames, timeout_s=timeout_s, recipe=recipe,
-                             extra_image=extra if recipe == "two-pictures" else None)
+                             extra_image=extra if recipe == "two-pictures" else None,
+                             **({"audio": audio} if recipe in AUDIO_RECIPES else {}),
+                             **({"video": video} if recipe in VIDEO_RECIPES else {}))
                 finally:
                     extra.unlink(missing_ok=True)
+                    audio.unlink(missing_ok=True)
+                    video.unlink(missing_ok=True)
         finally:
             image.unlink(missing_ok=True)
         digests = dict(previous["model_sha256"]) if previous is not None else {}

@@ -971,16 +971,30 @@ def compile_shot(project: dict, shot_id: str, chain: str | None = None) -> dict:
               **({"audio_notes": notes} if audios else {}), **({"definitions": definitions} if definitions else {})}
     vsa = start == "vsa"
     if vsa:
+        import windows_video_vsa
+        try:
+            vsa_recipe = windows_video_vsa.recipe_name(extra.get("vsa_recipe", "picture"))
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
         if extra.get("reference_video") or dialogue == "drama3" or lora_list(extra.get("loras")) or lora_list(film.get("loras")) or any(sheet.get("lora") for sheet in [*cast, place or {}]):
-            raise HTTPException(400, "VSA accepts one picture, spoken words and sound; video/audio references and extra LoRAs are not supported.")
+            raise HTTPException(400, "Choose bounded references in the VSA recipe fields. Automatic previs, Drama 3 and extra LoRAs are not supported by these recipes.")
         if ratio != "16:9" or tier != "480p":
             raise HTTPException(400, "VSA requires the film's 480p, 16:9 canvas (864x480).")
         if slot and slot["spare"] < 0:
             raise HTTPException(400, "Split this music slot into model-valid clips before rendering with VSA.")
-        image = extra.get("vsa_image") or ""
         fields["subjects"] = []
-        prompt = compose_references(fields, 1)
-        warnings.append("VSA: one reference picture, not an exact first frame; 864x480, four passes.")
+        vsa_inputs = {key: extra.get("vsa_" + key) or "" for key in
+                      (("video",) if vsa_recipe in windows_video_vsa.VIDEO_RECIPES else
+                       () if vsa_recipe == "text" else ("image", "extra_image") if vsa_recipe == "two-pictures" else ("image",))}
+        if vsa_recipe in windows_video_vsa.AUDIO_RECIPES:
+            vsa_inputs["audio"] = extra.get("vsa_audio") or ""
+            fields["audio_notes"] = [extra.get("vsa_audio_note") or ""]
+        if vsa_recipe in windows_video_vsa.VIDEO_RECIPES:
+            fields["video_subjects"] = [extra.get("vsa_video_note") or ""]
+            fields["video_sound"] = vsa_recipe == "video-sound"
+        count = 0 if vsa_recipe in windows_video_vsa.VIDEO_RECIPES else 2 if vsa_recipe == "two-pictures" else 1
+        prompt = compose(fields, False, frames=frames) if vsa_recipe == "text" else compose_references(fields, count)
+        warnings.append(f"VSA: {windows_video_vsa.RECIPES[vsa_recipe]}; references are not exact first-frame anchors; 864x480, four passes.")
     else:
         prompt = compose_references(fields, len(subjects)) if references else compose(fields, bool(image or previous), frames=frames)
     for one in negation.check_fields(fields)["negations"]:  # said, never rewritten (negation.py)
@@ -1018,13 +1032,14 @@ def compile_shot(project: dict, shot_id: str, chain: str | None = None) -> dict:
             **({"reference_videos": [clip]} if clip else {})}
     if vsa:
         import windows_video_vsa
-        plan = {"image": image, "seed": int(extra["seed"]) if extra.get("seed") is not None else 1, "frames": frames}
+        plan = {**vsa_inputs, **({"recipe": vsa_recipe} if vsa_recipe != "picture" else {}),
+                "seed": int(extra["seed"]) if extra.get("seed") is not None else 1, "frames": frames}
         memory = {"fits": False, "reason": ""}
         try:
             if not windows_video_vsa.windows_cuda.native_os():
                 raise ValueError("VSA is a native Windows backend.")
             windows_video_vsa.require({**plan, "prompt": prompt})
-            memory = windows_video_vsa.memory_fit(frames=frames)
+            memory = windows_video_vsa.memory_fit(frames=frames, **({"recipe": vsa_recipe} if vsa_recipe != "picture" else {}))
         except (OSError, ValueError, RuntimeError) as error:
             memory["reason"] = str(error)
         if not memory["fits"]:
